@@ -125,7 +125,7 @@ const __be32 cidr2mask[33] = {
 };
 /*
 static inline u32 cidr2mask(const int cidr) {
-	return htonl(bits ? 0xffffffff << (32 - cidr) : 0);
+	return htonl(bits ? ~0U << (32 - cidr) : 0);
 }
 */
 static inline u32
