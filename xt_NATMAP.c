@@ -67,9 +67,9 @@ struct natmap_net {
 	struct proc_dir_entry	*ipt_natmap;
 };
 
-/* set enitiy: can have many IPs */
+/* set entity: can have many IPs */
 struct natmap_ent {
-	struct hlist_node node;		/* hash bucket list */
+//	struct hlist_node node;		/* hash bucket list */
 	spinlock_t lock_bh;
 	struct {
 		__be32 addr;
@@ -82,7 +82,7 @@ struct natmap_ent {
 	struct {
 		u32 pkts;
 		u64 bytes;
-	} stat;				/* stats for each entity */
+	} stat;				/* stats for each entry */
 	struct rcu_head rcu;		/* destruction call list */
 };
 
