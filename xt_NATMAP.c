@@ -735,9 +735,11 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ht->mode &= ~XT_NATMAP_CGNT;
 			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
 			return 0;
-		} else if (strchr(c1, '=')) {
-			add = -2;
-			break;
+		} else if ((c2 = strchr(c1, '='))) {
+			if ((c2 - 1) == c1) {
+				add = -2;
+				break;
+			}
 		}
 		add = -1;
 		break;
