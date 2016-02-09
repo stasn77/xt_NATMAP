@@ -71,7 +71,12 @@ struct natmap_net {
 	struct proc_dir_entry	*ipt_natmap;
 };
 
-struct postnat_net {
+struct prenat_ent {
+	__be32 addr;
+	u32 cidr;
+};
+
+struct postnat_ent {
 	__be32 from, to;
 	u32 cidr;
 };
@@ -80,11 +85,8 @@ struct postnat_net {
 struct natmap_ent {
 	struct hlist_node node;		/* hash bucket list */
 	spinlock_t lock_bh;
-	struct {
-		__be32 addr;
-		u32 cidr;
-	} prenat;			/* prenat addr/cidr */
-	struct postnat_net postnat;	/* postnat from-to range */
+	struct prenat_ent  prenat;	/* prenat addr/cidr */
+	struct postnat_ent postnat;	/* postnat from-to range */
 	struct {
 		u32 pkts;
 		u64 bytes;
@@ -325,7 +327,7 @@ natmap_ent_del(struct xt_natmap_htable *ht, struct natmap_ent *ent)
 /* destroy linked content of hash table */
 static void
 htable_cleanup(struct xt_natmap_htable *ht, const bool stat,
-const struct postnat_net *postnat)
+const struct postnat_ent *postnat)
 	/* under natmap_mutex */
 {
 	unsigned int i;
@@ -338,7 +340,7 @@ const struct postnat_net *postnat)
 		hlist_for_each_entry_safe(ent, n, &ht->hash[i], node)
 			if (postnat) {
 				if (memcmp(&ent->postnat, postnat,
-				    sizeof(struct postnat_net)) == 0)
+				    sizeof(struct postnat_ent)) == 0)
 					natmap_ent_del(ht, ent);
 			} else if (stat)
 				memset(&ent->stat, 0, sizeof(ent->stat));
@@ -359,7 +361,7 @@ natmap_table_flush(struct xt_natmap_htable *ht, const bool stat)
 
 static void
 natmap_postnat_del(struct xt_natmap_htable *ht,
-const struct postnat_net *postnat)
+const struct postnat_ent *postnat)
 {
 	mutex_lock(&natmap_mutex);
 	htable_cleanup(ht, false, postnat);
@@ -684,9 +686,8 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 {
 	char * const buf = c1;			/* for logging only */
 	const char *c2;
-	__be32 prenat_addr = 0;
-	struct postnat_net postnat;
-	u32 cidr = 32;
+	struct prenat_ent  prenat;
+	struct postnat_ent postnat;
 	struct natmap_ent *ent;			/* new entry  */
 	struct natmap_ent *ent_chk = NULL;	/* old entry  */
 	bool warn = true;
@@ -790,20 +791,20 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 				return -EINVAL;
 			}
 		} else if (strchr(c2, '/')) {
-			if (sscanf(c2, "/%u", &cidr) == 1) {
-				if (cidr < 1 || cidr > 32) {
+			if (sscanf(c2, "/%u", &postnat.cidr) == 1) {
+				if (postnat.cidr < 1 || postnat.cidr > 32) {
 					pr_err("Prefix must be in range - 1..32, (cmd: %s)\n", buf);
 					return -EINVAL;
 				}
 			}
-			postnat.cidr = cidr;
-			cidr = 32;
-			postnat.from &= cidr2mask[cidr];
-			postnat.to = postnat.from ^ ~cidr2mask[cidr];
+			postnat.from &= cidr2mask[postnat.cidr];
+			postnat.to = postnat.from ^ ~cidr2mask[postnat.cidr];
 		} else
 			postnat.to = postnat.from;
 	}
 
+	prenat.addr = 0;
+	prenat.cidr = 32;
 	if (add == -2) {
 		if (!disable_log) {
 			if (postnat.cidr)
@@ -816,30 +817,30 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		natmap_postnat_del(ht, &postnat);
 		return 0;
 	} else if (ht->mode & XT_NATMAP_ADDR) {
-		if (!in4_pton(c1, strlen(c1), (u8 *)&prenat_addr, -1, &c2)) {
+		if (!in4_pton(c1, strlen(c1), (u8 *)&prenat.addr, -1, &c2)) {
 			pr_err("Invalid prenat IPv4 address format, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 
-		if (sscanf(c2, "/%u", &cidr) == 1) {
-			if (cidr < 1 || cidr > 32) {
+		if (sscanf(c2, "/%u", &prenat.cidr) == 1) {
+			if (prenat.cidr < 1 || prenat.cidr > 32) {
 				pr_err("Prefix must be in range - 1..32, (cmd: %s)\n", buf);
 				return -EINVAL;
 			}
-			prenat_addr &= cidr2mask[cidr];
+			prenat.addr &= cidr2mask[prenat.cidr];
 		}
 		if (!disable_log)
 			pr_info("%s %pI4/%2u -> %pI4-%pI4, <%s>\n",
-			    (add == 1) ? "Add" : "Del", &prenat_addr, cidr,
+			    (add == 1) ? "Add" : "Del", &prenat.addr, prenat.cidr,
 				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_MARK) {
-		if (sscanf(c1, "0x%x", &prenat_addr) != 1) {
+		if (sscanf(c1, "0x%x", &prenat.addr) != 1) {
 			pr_err("Invalid skb mark format, it should be: 0xMARK, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 		if (!disable_log)
 			pr_info("%s 0x%x -> %pI4-%pI4, <%s>\n",
-			    (add == 1) ? "Add" : "Del", prenat_addr,
+			    (add == 1) ? "Add" : "Del", prenat.addr,
 				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_PRIO) {
 		unsigned maj, min;
@@ -848,7 +849,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			pr_err("Invalid skb prio format, it should be: MAJ:MIN, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
-		prenat_addr = ((uint32_t)maj << 16) | (min & 0xffff);
+		prenat.addr = ((uint32_t)maj << 16) | (min & 0xffff);
 		if (!disable_log)
 			pr_info("%s %04x:%04x -> %pI4-%pI4, <%s>\n",
 			    (add == 1) ? "Add" : "Del", maj, min,
@@ -866,7 +867,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 
 
 	/* check existence of these IPs */
-	ent_chk = natmap_ent_find(ht, prenat_addr, cidr);
+	ent_chk = natmap_ent_find(ht, prenat.addr, prenat.cidr);
 
 	if (add == 1) {
 		/* add op should not reference any existing entries */
@@ -892,8 +893,8 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ent_chk->postnat.cidr = postnat.cidr;
 			spin_unlock_bh(&ent_chk->lock_bh);
 		} else {
-			ent->prenat.addr = prenat_addr;
-			ent->prenat.cidr = cidr;
+			ent->prenat.addr = prenat.addr;
+			ent->prenat.cidr = prenat.cidr;
 			ent->postnat.from = postnat.from;
 			ent->postnat.to = postnat.to;
 			ent->postnat.cidr = postnat.cidr;
