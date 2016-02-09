@@ -682,6 +682,7 @@ natmap_proc_open(struct inode *inode, struct file *file)
 static int
 parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 {
+	char * const buf = c1;			/* for logging only */
 	const char *c2;
 	__be32 prenat_addr = 0;
 	struct postnat_net postnat;
@@ -760,13 +761,13 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		add = 1;
 		break;
 	default:
-		pr_err("Rule should start with '+', '-', or '/'\n");
+		pr_err("Rule should start with '+', '-', or '/', (cmd: %s)\n", buf);
 		return -EINVAL;
 	}
 
 	c2 = strchr(c1, '=');
 	if (((add == 1) || (add == -2)) && !c2) {
-		pr_err("This op must contain '=' in the rule\n");
+		pr_err("This op must contain '=' in the rule, (cmd: %s)\n", buf);
 		return -EINVAL;
 	}
 	++c1;
@@ -776,22 +777,22 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	memset(&postnat, 0, sizeof(postnat));
 	if (add == 1 || add == -2) {
 		if (!in4_pton(c2, strlen(c2), (u8 *)&postnat.from, -1, &c2)) {
-			pr_err("Invalid postnat IPv4 address format\n");
+			pr_err("Invalid postnat IPv4 address format, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 		if (strchr(c2, '-')) {
 			++c2;
 			if (!in4_pton(c2, strlen(c2), (u8 *)&postnat.to, -1, NULL)) {
-				pr_err("Invalid postnat IPv4 address format\n");
+				pr_err("Invalid postnat IPv4 address format, (cmd: %s)\n", buf);
 				return -EINVAL;
 			} else if (postnat.from > postnat.to) {
-				pr_err("Second postnat IPv4 address must be > than first one\n");
+				pr_err("Second postnat IPv4 address must be > than first one, (cmd: %s)\n", buf);
 				return -EINVAL;
 			}
 		} else if (strchr(c2, '/')) {
 			if (sscanf(c2, "/%u", &cidr) == 1) {
 				if (cidr < 1 || cidr > 32) {
-					pr_err("Prefix must be in range - 1..32\n");
+					pr_err("Prefix must be in range - 1..32, (cmd: %s)\n", buf);
 					return -EINVAL;
 				}
 			}
@@ -816,13 +817,13 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		return 0;
 	} else if (ht->mode & XT_NATMAP_ADDR) {
 		if (!in4_pton(c1, strlen(c1), (u8 *)&prenat_addr, -1, &c2)) {
-			pr_err("Invalid prenat IPv4 address format\n");
+			pr_err("Invalid prenat IPv4 address format, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 
 		if (sscanf(c2, "/%u", &cidr) == 1) {
 			if (cidr < 1 || cidr > 32) {
-				pr_err("Prefix must be in range - 1..32\n");
+				pr_err("Prefix must be in range - 1..32, (cmd: %s)\n", buf);
 				return -EINVAL;
 			}
 			prenat_addr &= cidr2mask[cidr];
@@ -833,7 +834,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_MARK) {
 		if (sscanf(c1, "0x%x", &prenat_addr) != 1) {
-			pr_err("Invalid skb mark format, it should be: 0xMARK\n");
+			pr_err("Invalid skb mark format, it should be: 0xMARK, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 		if (!disable_log)
@@ -844,7 +845,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		unsigned maj, min;
 
 		if (sscanf(c1, "%x:%x", &maj, &min) != 2) {
-			pr_err("Invalid skb prio format, it should be: MAJ:MIN\n");
+			pr_err("Invalid skb prio format, it should be: MAJ:MIN, (cmd: %s)\n", buf);
 			return -EINVAL;
 		}
 		prenat_addr = ((uint32_t)maj << 16) | (min & 0xffff);
@@ -871,13 +872,13 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		/* add op should not reference any existing entries */
 		/* unless it's update op (which is quiet add) */
 		if (warn && ent_chk) {
-			pr_err("Add op references existing address\n");
+			pr_err("Add op references existing address, (cmd: %s)\n", buf);
 			goto unlock_einval;
 		}
 	} else if (add == -1) {
 		/* delete op should reference something */
 		if (warn && !ent_chk) {
-			pr_err("Del op doesn't reference any existing address\n");
+			pr_err("Del op doesn't reference any existing address, (cmd: %s)\n", buf);
 			goto unlock_einval;
 		}
 	}
