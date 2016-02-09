@@ -1,1 +1,1 @@
-/* placeholder, because kernel doesn't like empty files */
+#define GIT_VERSION "4b5e5a2-dirty"

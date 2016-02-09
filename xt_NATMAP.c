@@ -77,7 +77,7 @@ struct natmap_ent {
 	} prenat;			/* prenat addr/cidr */
 	struct {
 		__be32 from, to;
-		bool netmap;
+		u32 cidr;
 	} postnat;			/* postnat from-to range */
 	struct {
 		u32 pkts;
@@ -429,7 +429,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		    | NF_NAT_RANGE_PERSISTENT;
 
 		spin_lock(&ent->lock_bh);
-		if (ent->postnat.netmap) {
+		if (ent->postnat.cidr) {
 			__be32 netmask;
 
 			prenat_addr = ip_hdr(skb)->saddr;
@@ -455,7 +455,11 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 				newrange.min_proto.all = htons(min_port);
 				newrange.max_proto.all = htons(min_port
 							    + ports - 1);
-				newrange.flags |= NF_NAT_RANGE_PROTO_SPECIFIED;
+/*				pr_info("addrs: %u, ports: %u, %u, %u, %u, min: %u, max: %u\n",
+				    addrs, ports, addrs, htonl(prenat_addr ^ ent->prenat.addr), (htonl(prenat_addr ^ ent->prenat.addr) % addrs),
+				    ntohs(newrange.min_proto.all),
+				    ntohs(newrange.max_proto.all));
+*/				newrange.flags |= NF_NAT_RANGE_PROTO_SPECIFIED;
 			} else {
 				newrange.min_proto = mr->min_proto;
 				newrange.max_proto = mr->max_proto;
@@ -549,8 +553,13 @@ natmap_seq_ent_show(struct natmap_ent *ent, int mode, struct seq_file *s)
 		seq_printf(s, "0x%08x",
 		    ent->prenat.addr);
 
-	seq_printf(s, " --> %15pI4 - %-15pI4",
-	    &ent->postnat.from, &ent->postnat.to);
+	if (ent->postnat.cidr)
+		seq_printf(s, " => %15pI4/%-15u",
+		    &ent->postnat.from, ent->postnat.cidr);
+	else
+		seq_printf(s, " => %15pI4-%-15pI4",
+		    &ent->postnat.from, &ent->postnat.to);
+
 	seq_printf(s, "  stat: %u/%llu",
 	    ent->stat.pkts, ent->stat.bytes);
 	seq_puts(s, "\n");
@@ -657,10 +666,9 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	__be32 prenat_addr = 0;
 	__be32 postnat_from = 0;
 	__be32 postnat_to = 0;
-	u32 cidr = 32;
+	u32 cidr = 32, post_cidr = 0;
 	struct natmap_ent *ent;			/* new entry  */
 	struct natmap_ent *ent_chk = NULL;	/* old entry  */
-	bool netmap = false;
 	bool warn = true;
 	bool add;
 
@@ -760,7 +768,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 					return -EINVAL;
 				}
 			}
-			netmap = true;
+			post_cidr = cidr;
 			postnat_from &= cidr2mask[cidr];
 			postnat_to = postnat_from ^ ~cidr2mask[cidr];
 		} else
@@ -833,14 +841,14 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			spin_lock_bh(&ent_chk->lock_bh);
 			ent_chk->postnat.from = postnat_from;
 			ent_chk->postnat.to = postnat_to;
-			ent_chk->postnat.netmap = netmap;
+			ent_chk->postnat.cidr = post_cidr;
 			spin_unlock_bh(&ent_chk->lock_bh);
 		} else {
 			ent->prenat.addr = prenat_addr;
 			ent->prenat.cidr = cidr;
 			ent->postnat.from = postnat_from;
 			ent->postnat.to = postnat_to;
-			ent->postnat.netmap = netmap;
+			ent->postnat.cidr = post_cidr;
 
 			/* Rehash when load factor exceeds 0.75 */
 			if (ht->ent_count * 4 > ht->hsize * 3) {
