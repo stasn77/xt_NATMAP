@@ -56,8 +56,12 @@ MODULE_VERSION(XT_NATMAP_VERSION);
 MODULE_ALIAS("ipt_NATMAP");
 
 static unsigned int hashsize __read_mostly = 8192;
+static unsigned int disable_log __read_mostly = 0;
 module_param(hashsize, uint, 0400);
 MODULE_PARM_DESC(hashsize, "default hash size used to look up IPs");
+module_param(disable_log, uint, S_IRUSR);
+MODULE_PARM_DESC(disable_log,
+		" disables logging of bind/timeout events (default: 0)");
 
 static DEFINE_MUTEX(natmap_mutex);	/* htable lists management */
 
@@ -798,10 +802,14 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	}
 
 	if (add == -2) {
-		if (postnat.cidr)
-			pr_info("Del all entries where postnat = %pI4/%u\n", &postnat.from, postnat.cidr);
-		else
-			pr_info("Del all entries where postnat = %pI4-%pI4\n", &postnat.from, &postnat.to);
+		if (!disable_log) {
+			if (postnat.cidr)
+				pr_info("Del all entries where postnat = %pI4/%u\n",
+				    &postnat.from, postnat.cidr);
+			else
+				pr_info("Del all entries where postnat = %pI4-%pI4\n",
+				    &postnat.from, &postnat.to);
+		}
 		natmap_postnat_del(ht, &postnat);
 		return 0;
 	} else if (ht->mode & XT_NATMAP_ADDR) {
@@ -817,15 +825,19 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			}
 			prenat_addr &= cidr2mask[cidr];
 		}
-		pr_info("%s %pI4/%2u -> %pI4-%pI4 to <%s>\n",
-		    (add == 1) ? "Add" : "Del", &prenat_addr, cidr, &postnat.from, &postnat.to, ht->name);
+		if (!disable_log)
+			pr_info("%s %pI4/%2u -> %pI4-%pI4, <%s>\n",
+			    (add == 1) ? "Add" : "Del", &prenat_addr, cidr,
+				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_MARK) {
 		if (sscanf(c1, "0x%x", &prenat_addr) != 1) {
 			pr_err("Invalid skb mark format, it should be: 0xMARK\n");
 			return -EINVAL;
 		}
-		pr_info("%s 0x%x -> %pI4-%pI4 to <%s>\n",
-		    (add == 1) ? "Add" : "Del", prenat_addr, &postnat.from, &postnat.to, ht->name);
+		if (!disable_log)
+			pr_info("%s 0x%x -> %pI4-%pI4, <%s>\n",
+			    (add == 1) ? "Add" : "Del", prenat_addr,
+				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_PRIO) {
 		unsigned maj, min;
 
@@ -834,8 +846,10 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			return -EINVAL;
 		}
 		prenat_addr = ((uint32_t)maj << 16) | (min & 0xffff);
-		pr_info("%s %04x:%04x -> %pI4-%pI4 to <%s>\n",
-		    (add == 1) ? "Add" : "Del", maj, min, &postnat.from, &postnat.to, ht->name);
+		if (!disable_log)
+			pr_info("%s %04x:%04x -> %pI4-%pI4, <%s>\n",
+			    (add == 1) ? "Add" : "Del", maj, min,
+				&postnat.from, &postnat.to, ht->name);
 	}
 
 	/* prepare ent */
