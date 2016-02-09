@@ -67,18 +67,20 @@ struct natmap_net {
 	struct proc_dir_entry	*ipt_natmap;
 };
 
+struct postnat_net {
+	__be32 from, to;
+	u32 cidr;
+};
+
 /* set entity: can have many IPs */
 struct natmap_ent {
-//	struct hlist_node node;		/* hash bucket list */
+	struct hlist_node node;		/* hash bucket list */
 	spinlock_t lock_bh;
 	struct {
 		__be32 addr;
 		u32 cidr;
 	} prenat;			/* prenat addr/cidr */
-	struct {
-		__be32 from, to;
-		u32 cidr;
-	} postnat;			/* postnat from-to range */
+	struct postnat_net postnat;	/* postnat from-to range */
 	struct {
 		u32 pkts;
 		u64 bytes;
@@ -318,7 +320,8 @@ natmap_ent_del(struct xt_natmap_htable *ht, struct natmap_ent *ent)
 
 /* destroy linked content of hash table */
 static void
-htable_cleanup(struct xt_natmap_htable *ht, const bool stat)
+htable_cleanup(struct xt_natmap_htable *ht, const bool stat,
+const struct postnat_net *postnat)
 	/* under natmap_mutex */
 {
 	unsigned int i;
@@ -329,7 +332,11 @@ htable_cleanup(struct xt_natmap_htable *ht, const bool stat)
 
 		spin_lock(&ht->lock);
 		hlist_for_each_entry_safe(ent, n, &ht->hash[i], node)
-			if (stat)
+			if (postnat) {
+				if (memcmp(&ent->postnat, postnat,
+				    sizeof(struct postnat_net)) == 0)
+					natmap_ent_del(ht, ent);
+			} else if (stat)
 				memset(&ent->stat, 0, sizeof(ent->stat));
 			else
 				natmap_ent_del(ht, ent);
@@ -342,7 +349,16 @@ static void
 natmap_table_flush(struct xt_natmap_htable *ht, const bool stat)
 {
 	mutex_lock(&natmap_mutex);
-	htable_cleanup(ht, stat);
+	htable_cleanup(ht, stat, NULL);
+	mutex_unlock(&natmap_mutex);
+}
+
+static void
+natmap_postnat_del(struct xt_natmap_htable *ht,
+const struct postnat_net *postnat)
+{
+	mutex_lock(&natmap_mutex);
+	htable_cleanup(ht, false, postnat);
 	mutex_unlock(&natmap_mutex);
 }
 
@@ -358,7 +374,7 @@ htable_destroy(struct xt_natmap_htable *ht)
 	if (natmap_net->ipt_natmap)
 		remove_proc_entry(ht->name, natmap_net->ipt_natmap);
 
-	htable_cleanup(ht, false);
+	htable_cleanup(ht, false, NULL);
 	BUG_ON(ht->ent_count != 0);
 	kvfree(ht->hash);
 	kvfree(ht);
@@ -664,13 +680,12 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 {
 	const char *c2;
 	__be32 prenat_addr = 0;
-	__be32 postnat_from = 0;
-	__be32 postnat_to = 0;
-	u32 cidr = 32, post_cidr = 0;
+	struct postnat_net postnat;
+	u32 cidr = 32;
 	struct natmap_ent *ent;			/* new entry  */
 	struct natmap_ent *ent_chk = NULL;	/* old entry  */
 	bool warn = true;
-	bool add;
+	int add;
 
 	/* make sure that size is enough for two decrements */
 	if (size < 2 || !c1 || !ht)
@@ -690,6 +705,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	}
 	if (size < 1)
 		return -EINVAL;
+
 	switch (*c1) {
 	case '\n':
 	case '#':
@@ -715,8 +731,11 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ht->mode &= ~XT_NATMAP_CGNT;
 			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
 			return 0;
+		} else if (strchr(c1, '=')) {
+			add = -2;
+			break;
 		}
-		add = false;
+		add = -1;
 		break;
 	case '+':
 		if (strcmp(c1, "+hotdrop") == 0) {
@@ -732,7 +751,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
 			return 0;
 		}
-		add = true;
+		add = 1;
 		break;
 	default:
 		pr_err("Rule should start with '+', '-', or '/'\n");
@@ -740,24 +759,26 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	}
 
 	c2 = strchr(c1, '=');
-	if (add && !c2) {
-		pr_err("Add op must contain '=' in the rule\n");
+	if (((add == 1) || (add == -2)) && !c2) {
+		pr_err("This op must contain '=' in the rule\n");
 		return -EINVAL;
 	}
-	++c1; ++c2;
+	++c1;
+	++c2;
 
 	/* Parse prenat, postnat addresses */
-	if (add) {
-		if (!in4_pton(c2, strlen(c2), (u8 *)&postnat_from, -1, &c2)) {
+	memset(&postnat, 0, sizeof(postnat));
+	if (add == 1 || add == -2) {
+		if (!in4_pton(c2, strlen(c2), (u8 *)&postnat.from, -1, &c2)) {
 			pr_err("Invalid postnat IPv4 address format\n");
 			return -EINVAL;
 		}
 		if (strchr(c2, '-')) {
 			++c2;
-			if (!in4_pton(c2, strlen(c2), (u8 *)&postnat_to, -1, NULL)) {
+			if (!in4_pton(c2, strlen(c2), (u8 *)&postnat.to, -1, NULL)) {
 				pr_err("Invalid postnat IPv4 address format\n");
 				return -EINVAL;
-			} else if (postnat_from > postnat_to) {
+			} else if (postnat.from > postnat.to) {
 				pr_err("Second postnat IPv4 address must be > than first one\n");
 				return -EINVAL;
 			}
@@ -768,14 +789,22 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 					return -EINVAL;
 				}
 			}
-			post_cidr = cidr;
-			postnat_from &= cidr2mask[cidr];
-			postnat_to = postnat_from ^ ~cidr2mask[cidr];
+			postnat.cidr = cidr;
+			cidr = 32;
+			postnat.from &= cidr2mask[cidr];
+			postnat.to = postnat.from ^ ~cidr2mask[cidr];
 		} else
-			postnat_to = postnat_from;
+			postnat.to = postnat.from;
 	}
 
-	if (ht->mode & XT_NATMAP_ADDR) {
+	if (add == -2) {
+		if (postnat.cidr)
+			pr_info("Del all entries where postnat = %pI4/%u\n", &postnat.from, postnat.cidr);
+		else
+			pr_info("Del all entries where postnat = %pI4-%pI4\n", &postnat.from, &postnat.to);
+		natmap_postnat_del(ht, &postnat);
+		return 0;
+	} else if (ht->mode & XT_NATMAP_ADDR) {
 		if (!in4_pton(c1, strlen(c1), (u8 *)&prenat_addr, -1, &c2)) {
 			pr_err("Invalid prenat IPv4 address format\n");
 			return -EINVAL;
@@ -789,14 +818,14 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			prenat_addr &= cidr2mask[cidr];
 		}
 		pr_info("%s %pI4/%2u -> %pI4-%pI4 to <%s>\n",
-		    add ? "Add" : "Del", &prenat_addr, cidr, &postnat_from, &postnat_to, ht->name);
+		    (add == 1) ? "Add" : "Del", &prenat_addr, cidr, &postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_MARK) {
 		if (sscanf(c1, "0x%x", &prenat_addr) != 1) {
 			pr_err("Invalid skb mark format, it should be: 0xMARK\n");
 			return -EINVAL;
 		}
 		pr_info("%s 0x%x -> %pI4-%pI4 to <%s>\n",
-		    add ? "Add" : "Del", prenat_addr, &postnat_from, &postnat_to, ht->name);
+		    (add == 1) ? "Add" : "Del", prenat_addr, &postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_PRIO) {
 		unsigned maj, min;
 
@@ -806,7 +835,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		}
 		prenat_addr = ((uint32_t)maj << 16) | (min & 0xffff);
 		pr_info("%s %04x:%04x -> %pI4-%pI4 to <%s>\n",
-		    add ? "Add" : "Del", maj, min, &postnat_from, &postnat_to, ht->name);
+		    (add == 1) ? "Add" : "Del", maj, min, &postnat.from, &postnat.to, ht->name);
 	}
 
 	/* prepare ent */
@@ -817,17 +846,19 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	spin_lock_init(&ent->lock_bh);
 
 	spin_lock(&ht->lock);
+
+
 	/* check existence of these IPs */
 	ent_chk = natmap_ent_find(ht, prenat_addr, cidr);
 
-	if (add) {
+	if (add == 1) {
 		/* add op should not reference any existing entries */
 		/* unless it's update op (which is quiet add) */
 		if (warn && ent_chk) {
 			pr_err("Add op references existing address\n");
 			goto unlock_einval;
 		}
-	} else {
+	} else if (add == -1) {
 		/* delete op should reference something */
 		if (warn && !ent_chk) {
 			pr_err("Del op doesn't reference any existing address\n");
@@ -835,20 +866,20 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		}
 	}
 
-	if (add) {
+	if (add == 1) {
 		if (ent_chk) {
 			/* update */
 			spin_lock_bh(&ent_chk->lock_bh);
-			ent_chk->postnat.from = postnat_from;
-			ent_chk->postnat.to = postnat_to;
-			ent_chk->postnat.cidr = post_cidr;
+			ent_chk->postnat.from = postnat.from;
+			ent_chk->postnat.to = postnat.to;
+			ent_chk->postnat.cidr = postnat.cidr;
 			spin_unlock_bh(&ent_chk->lock_bh);
 		} else {
 			ent->prenat.addr = prenat_addr;
 			ent->prenat.cidr = cidr;
-			ent->postnat.from = postnat_from;
-			ent->postnat.to = postnat_to;
-			ent->postnat.cidr = post_cidr;
+			ent->postnat.from = postnat.from;
+			ent->postnat.to = postnat.to;
+			ent->postnat.cidr = postnat.cidr;
 
 			/* Rehash when load factor exceeds 0.75 */
 			if (ht->ent_count * 4 > ht->hsize * 3) {
