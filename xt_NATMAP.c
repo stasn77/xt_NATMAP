@@ -76,16 +76,25 @@ struct postnat_ent {
 	u32 cidr;
 };
 
-/* set entity: can have many IPs */
+/* set entity: prenat=postnat pairs */
 struct natmap_ent {
 	struct hlist_node node;		/* hash bucket list */
 	spinlock_t lock_bh;
 	struct prenat_ent  prenat;	/* prenat addr/cidr */
-	struct postnat_ent postnat;	/* postnat from-to range */
+	struct postnat_ent postnat;	/* postnat from[-to|/cidr] range */
 	struct {
 		u32 pkts;
 		u64 bytes;
 	} stat;				/* stats for each entry */
+	struct natmap_post_ent *post_ent;/* pointer to postnat ent */
+	struct rcu_head rcu;		/* destruction call list */
+};
+
+struct natmap_post_ent {
+	struct hlist_node node;		/* hash bucket list */
+	spinlock_t lock_bh;
+	__be32 postnat_addr;		/* postnat addr */
+	struct natmap_ent *ent;		/* pointer to prenat ent */
 	struct rcu_head rcu;		/* destruction call list */
 };
 
@@ -96,12 +105,14 @@ struct xt_natmap_htable {
 	__u8 mode;			/* src or skb mode, pers & drop */
 	spinlock_t lock;		/* write access to hash */
 	unsigned int ent_count;		/* currently entities linked */
+	unsigned int post_ent_count;	/* currently postnat entities linked */
 	unsigned int hsize;		/* hash array size */
-	unsigned int cidr_map[32];	/* count of prefixes */
+	unsigned int cidr_map[33];	/* count of prefixes */
 	struct net *net;		/* for destruction */
 	struct proc_dir_entry *pde;
 	char name[XT_NATMAP_NAME_LEN];
-	struct hlist_head *hash;	/* rcu lists array[size] of prenat_ip */
+	struct hlist_head *hash;	/* rcu lists array of prenat_ent's */
+	struct hlist_head *post;	/* rcu lists array of postnat_ent's */
 };
 
 /* net namespace support */
@@ -138,6 +149,12 @@ static inline u32 cidr2mask(const int cidr) {
 }
 */
 static inline u32
+hash_addr(unsigned int hsize, const __be32 addr)
+{
+	return reciprocal_scale(jhash_1word(addr, 0), hsize);
+}
+
+static inline u32
 hash_addr_mask(unsigned int hsize, const __be32 addr, const u32 cidr)
 {
 	return reciprocal_scale(jhash_2words(addr, cidr2mask[cidr], 0), hsize);
@@ -156,6 +173,21 @@ natmap_ent_zalloc(void)
 	/* will not need INIT_HLIST_NODE because ent's are zeroized */
 
 	return ent;
+}
+
+static struct natmap_post_ent *
+natmap_post_ent_zalloc(void)
+{
+	struct natmap_post_ent *post_ent;
+	unsigned int sz = sizeof(struct natmap_post_ent);
+
+	if (sz <= PAGE_SIZE)
+		post_ent = kzalloc(sz, GFP_KERNEL);
+	else
+		post_ent = vzalloc(sz);
+	/* will not need INIT_HLIST_NODE because ent's are zeroized */
+
+	return post_ent;
 }
 
 static struct hlist_head *
@@ -216,7 +248,18 @@ natmap_ent_add(struct xt_natmap_htable *ht, struct natmap_ent *ent)
 	ht->ent_count++;
 }
 
-/* get entity by address */
+static void
+natmap_post_ent_add(struct xt_natmap_htable *ht, struct natmap_post_ent *post_ent)
+	/* under ht->lock */
+{
+	/* add each address into htable hash */
+	hlist_add_head_rcu(&post_ent->node, &ht->post[hash_addr(
+		ht->hsize, post_ent->postnat_addr)]);
+
+	ht->post_ent_count++;
+}
+
+/* get entity by prenat address */
 static inline struct natmap_ent *
 natmap_ent_find(const struct xt_natmap_htable *ht,
 const __be32 prenat_addr, const u32 cidr)
@@ -243,6 +286,39 @@ const __be32 prenat_addr, const u32 cidr)
 	return NULL;
 }
 
+/* reverse get entity by postnat address */
+static inline struct natmap_ent *
+natmap_ent_rfind(const struct xt_natmap_htable *ht,
+const __be32 postnat_addr)
+{
+	u32 h;
+	struct natmap_post_ent *post_ent = NULL;
+
+	h = hash_addr(ht->hsize, postnat_addr);
+	if (!hlist_empty(&ht->post[h]))
+		hlist_for_each_entry_rcu(post_ent, &ht->post[h], node)
+				if (post_ent->postnat_addr == postnat_addr)
+					return post_ent->ent;
+
+	return NULL;
+}
+/*
+static inline struct natmap_ent *
+natmap_ent_rfind(const struct xt_natmap_htable *ht,
+const __be32 postnat_addr)
+{
+	unsigned int i;
+	struct natmap_ent *ent = NULL;
+
+	for (i = 0; i < ht->hsize; i++)
+		if (!hlist_empty(&ht->hash[i]))
+			hlist_for_each_entry_rcu(ent, &ht->hash[i], node)
+				if (ent->postnat.from == postnat_addr)
+					return ent;
+
+	return NULL;
+}
+*/
 /* allocate named hash table, register its proc entry */
 static int
 htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
@@ -270,11 +346,19 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 		return -ENOMEM;
 	}
 
+	ht->post = natmap_hash_zalloc(hsize);
+	if (ht->post == NULL) {
+		kvfree(ht->hash);
+		kvfree(ht);
+		return -ENOMEM;
+	}
+
 	tinfo->ht = ht;
 
 	ht->use = 1;
 	ht->hsize = hsize;
 	ht->ent_count = 0;
+	ht->post_ent_count = 0;
 	ht->mode = tinfo->mode;
 	strcpy(ht->name, tinfo->name);
 
@@ -283,6 +367,8 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 	ht->pde = proc_create_data(tinfo->name, 0644, natmap_net->ipt_natmap,
 		    &natmap_fops, ht);
 	if (ht->pde == NULL) {
+		kvfree(ht->hash);
+		kvfree(ht->post);
 		kvfree(ht);
 		return -ENOMEM;
 	}
@@ -309,6 +395,14 @@ natmap_ent_free_rcu(struct rcu_head *head)
 	kvfree(ent);
 }
 
+static void
+natmap_post_ent_free_rcu(struct rcu_head *head)
+{
+	struct natmap_post_ent *post_ent = container_of(head, struct natmap_post_ent, rcu);
+
+	kvfree(post_ent);
+}
+
 /* remove natmap entry, called from proc interface */
 static void
 natmap_ent_del(struct xt_natmap_htable *ht, struct natmap_ent *ent)
@@ -323,6 +417,19 @@ natmap_ent_del(struct xt_natmap_htable *ht, struct natmap_ent *ent)
 
 	BUG_ON(ht->ent_count == 0);
 	ht->ent_count--;
+}
+
+static void
+natmap_post_ent_del(struct xt_natmap_htable *ht, struct natmap_post_ent *post_ent)
+	/* htable_cleanup, under natmap_mutex */
+	/* under ht->lock */
+{
+	hlist_del_rcu(&post_ent->node);
+
+	call_rcu(&post_ent->rcu, natmap_post_ent_free_rcu);
+
+	BUG_ON(ht->post_ent_count == 0);
+	ht->post_ent_count--;
 }
 
 /* destroy linked content of hash table */
@@ -341,12 +448,19 @@ const struct postnat_ent *postnat)
 		hlist_for_each_entry_safe(ent, n, &ht->hash[i], node)
 			if (postnat) {
 				if (memcmp(&ent->postnat, postnat,
-				    sizeof(struct postnat_ent)) == 0)
+				    sizeof(struct postnat_ent)) == 0) {
 					natmap_ent_del(ht, ent);
-			} else if (stat)
+					if (ent->post_ent)
+						natmap_post_ent_del(ht,
+						    ent->post_ent);
+				}
+			} else if (stat) {
 				memset(&ent->stat, 0, sizeof(ent->stat));
-			else
+			} else {
 				natmap_ent_del(ht, ent);
+				if (ent->post_ent)
+					natmap_post_ent_del(ht, ent->post_ent);
+			}
 		spin_unlock(&ht->lock);
 		cond_resched();
 	}
@@ -382,7 +496,9 @@ htable_destroy(struct xt_natmap_htable *ht)
 		remove_proc_entry(ht->name, natmap_net->ipt_natmap);
 
 	htable_cleanup(ht, false, NULL);
+	BUG_ON(ht->post_ent_count != 0);
 	BUG_ON(ht->ent_count != 0);
+	kvfree(ht->post);
 	kvfree(ht->hash);
 	kvfree(ht);
 }
@@ -431,10 +547,39 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
 	int ret = XT_CONTINUE;
-	__be32 prenat_addr;
+	__be32 prenat_addr, postnat_addr;
 
-	NF_CT_ASSERT(par->hooknum == NF_INET_POST_ROUTING);
+	NF_CT_ASSERT(par->hooknum == NF_INET_POST_ROUTING ||
+		     par->hooknum == NF_INET_PRE_ROUTING);
 	ct = nf_ct_get(skb, &ctinfo);
+
+	rcu_read_lock();
+	if (par->hooknum == NF_INET_PRE_ROUTING) {
+		if (!(ht->mode & XT_NATMAP_2WAY))
+			goto unlock;
+
+		postnat_addr = ip_hdr(skb)->daddr;
+
+		pr_info("Postnat check: %pI4\n", &postnat_addr);
+
+		ent = natmap_ent_rfind(ht, postnat_addr);
+		if (ent) {
+			spin_lock(&ent->lock_bh);
+			prenat_addr = ent->prenat.addr;
+			spin_unlock(&ent->lock_bh);
+
+			pr_info("Postnat found: %pI4 -> %pI4\n", &postnat_addr, &prenat_addr);
+			memset(&newrange, 0, sizeof(newrange));
+			newrange.flags = mr->flags | NF_NAT_RANGE_MAP_IPS;
+			newrange.min_addr.ip = prenat_addr;
+			newrange.max_addr.ip = prenat_addr;
+			newrange.min_proto = mr->min_proto;
+			newrange.max_proto = mr->max_proto;
+			ret = nf_nat_setup_info(ct, &newrange,
+					 HOOK2MANIP(par->hooknum));
+		}
+		goto unlock;
+	}
 
 	if (tginfo->mode & XT_NATMAP_PRIO)
 		prenat_addr = skb->priority;
@@ -443,7 +588,6 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	else
 		prenat_addr = ip_hdr(skb)->saddr;
 
-	rcu_read_lock();
 	ent = natmap_ent_find(ht, prenat_addr, 1);
 	if (ent) {
 		memset(&newrange, 0, sizeof(newrange));
@@ -504,6 +648,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	} else if (ht->mode & XT_NATMAP_DROP)
 		ret = NF_DROP;
 
+unlock:
 	rcu_read_unlock();
 	return ret;
 }
@@ -516,7 +661,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	struct net *net = par->net;
 	struct xt_natmap_tginfo *tginfo = par->targinfo;
 	const struct nf_nat_range *mr = &tginfo->range;
-	int ret;
+	int ret = 0;
 
 	if (!(mr->flags & NF_NAT_RANGE_MAP_IPS)) {
 		pr_debug("NATMAP: bad MAP_IPS.\n");
@@ -526,9 +671,11 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	if (tginfo->name[sizeof(tginfo->name) - 1] != '\0')
 		return -EINVAL;
 
-	mutex_lock(&natmap_mutex);
-	ret = htable_get(net, tginfo);
-	mutex_unlock(&natmap_mutex);
+//	if (!(par->hook_mask & (1 << NF_INET_PRE_ROUTING))) {
+		mutex_lock(&natmap_mutex);
+		ret = htable_get(net, tginfo);
+		mutex_unlock(&natmap_mutex);
+//	}
 	return ret;
 }
 
@@ -551,7 +698,8 @@ static struct xt_target natmap_tg_reg[] __read_mostly = {
 		.target		= natmap_tg,
 		.targetsize	= sizeof(struct xt_natmap_tginfo),
 		.table		= "nat",
-		.hooks		= (1 << NF_INET_POST_ROUTING),
+		.hooks		= (1 << NF_INET_POST_ROUTING) |
+				  (1 << NF_INET_PRE_ROUTING),
 		.checkentry	= natmap_tg_check,
 		.destroy	= natmap_tg_destroy,
 		.me		= THIS_MODULE,
@@ -623,14 +771,15 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 		return ERR_PTR(-ENOMEM);
 	*bucket = *pos;
 
-	seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s\n",
+	seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s%s\n",
 	    ht->name, ht->ent_count, ht->hsize,
 	    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
 	    (ht->mode & XT_NATMAP_MARK) ? "mark"  : "",
 	    (ht->mode & XT_NATMAP_ADDR) ? "addr"  : "",
 	    (ht->mode & XT_NATMAP_PERS) ? "+persistent" : "-persistent",
 	    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
-	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat");
+	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
+	    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
 
 	return bucket;
 }
@@ -690,6 +839,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	struct prenat_ent  prenat;
 	struct postnat_ent postnat;
 	struct natmap_ent *ent;			/* new entry  */
+	struct natmap_post_ent *post_ent;	/* new entry  */
 	struct natmap_ent *ent_chk = NULL;	/* old entry  */
 	bool warn = true;
 	int add;
@@ -862,10 +1012,13 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	if (!ent)
 		return -ENOMEM;
 
+	post_ent = natmap_post_ent_zalloc();
+	if (!post_ent)
+		return -ENOMEM;
+
 	spin_lock_init(&ent->lock_bh);
 
 	spin_lock(&ht->lock);
-
 
 	/* check existence of these IPs */
 	ent_chk = natmap_ent_find(ht, prenat.addr, prenat.cidr);
@@ -899,6 +1052,9 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ent->postnat.from = postnat.from;
 			ent->postnat.to = postnat.to;
 			ent->postnat.cidr = postnat.cidr;
+			ent->post_ent = post_ent;
+			post_ent->ent = ent;
+			post_ent->postnat_addr = postnat.from;
 
 			/* Rehash when load factor exceeds 0.75 */
 			if (ht->ent_count * 4 > ht->hsize * 3) {
@@ -907,19 +1063,27 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 				natmap_hash_grow(ht);
 			}
 			natmap_ent_add(ht, ent);
+			natmap_post_ent_add(ht, post_ent);
 			ent = NULL;
+			post_ent = NULL;
 		}
-	} else if (ent_chk)
+	} else if (ent_chk) {
+		if (ent_chk->post_ent)
+			natmap_post_ent_del(ht, ent_chk->post_ent);
 		natmap_ent_del(ht, ent_chk);
+	}
 
 	spin_unlock(&ht->lock);
 
+	if (post_ent)
+		kvfree(post_ent);
 	if (ent)
 		kvfree(ent);
 	return 0;
 
 unlock_einval:
 	spin_unlock(&ht->lock);
+	kvfree(post_ent);
 	kvfree(ent);
 	return -EINVAL;
 }
