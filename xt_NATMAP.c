@@ -55,21 +55,16 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION(XT_NATMAP_VERSION);
 MODULE_ALIAS("ipt_NATMAP");
 
-static unsigned int hashsize __read_mostly = 8192;
+static unsigned int hashsize __read_mostly = 1024;
 static unsigned int disable_log __read_mostly = 0;
 module_param(hashsize, uint, 0400);
-MODULE_PARM_DESC(hashsize, "default hash size used to look up IPs");
+MODULE_PARM_DESC(hashsize,
+		" inital hash size used to look up IPs (default: 1024)");
 module_param(disable_log, uint, S_IRUSR);
 MODULE_PARM_DESC(disable_log,
 		" disables logging of bind/timeout events (default: 0)");
 
 static DEFINE_MUTEX(natmap_mutex);	/* htable lists management */
-
-/* net namespace support */
-struct natmap_net {
-	struct hlist_head	htables;
-	struct proc_dir_entry	*ipt_natmap;
-};
 
 struct prenat_ent {
 	__be32 addr;
@@ -109,6 +104,12 @@ struct xt_natmap_htable {
 	struct hlist_head *hash;	/* rcu lists array[size] of prenat_ip */
 };
 
+/* net namespace support */
+struct natmap_net {
+	struct hlist_head	htables;
+	struct proc_dir_entry	*ipt_natmap;
+};
+
 static int natmap_net_id;
 /* return pointer to per-net-namespace struct */
 static inline struct
@@ -133,7 +134,7 @@ const __be32 cidr2mask[33] = {
 };
 /*
 static inline u32 cidr2mask(const int cidr) {
-	return htonl(bits ? ~0U << (32 - cidr) : 0);
+	return htonl(cidr ? ~0U << (32 - cidr) : 0);
 }
 */
 static inline u32
@@ -253,7 +254,7 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 	unsigned int sz;		/* (bytes) */
 
 	if (hsize < 256 || hsize > 1000000)
-		hsize = 8192;
+		hsize = 1024;
 
 	sz = sizeof(struct xt_natmap_htable);
 	if (sz <= PAGE_SIZE)
