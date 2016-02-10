@@ -73,9 +73,15 @@ static int parse_mode(uint8_t *mode, const char *option_arg)
 	if (strcasecmp("prio", option_arg) == 0) {
 		*mode &= ~XT_NATMAP_ADDR;
 		*mode |= XT_NATMAP_PRIO;
+		if (*mode & XT_NATMAP_2WAY)
+			xtables_error(PARAMETER_PROBLEM,
+			    "PRIO mode is not possible with 2-way mode\n");
 	} else if (strcasecmp("mark", option_arg) == 0) {
 		*mode &= ~XT_NATMAP_ADDR;
 		*mode |= XT_NATMAP_MARK;
+		if (*mode & XT_NATMAP_2WAY)
+			xtables_error(PARAMETER_PROBLEM,
+			    "MARK mode is not possible with 2-way mode\n");
 	} else if (strcasecmp("addr", option_arg) == 0)
 		*mode |= XT_NATMAP_ADDR;
 	else
@@ -115,6 +121,9 @@ static void natmap_parse(struct xt_option_call *cb)
 		info->mode |= XT_NATMAP_CGNT;
 		break;
 	case O_2WAY:
+		if (!(info->mode & XT_NATMAP_ADDR))
+			xtables_error(PARAMETER_PROBLEM,
+			    "2-way mode only available with ADDR mode\n");
 		info->mode |= XT_NATMAP_2WAY;
 		break;
 	}
