@@ -285,7 +285,7 @@ natmap_pre_rfind(const struct xt_natmap_htable *ht,
 const __be32 post_ip)
 {
 	u32 h;
-	struct natmap_post *post = NULL;
+	struct natmap_post *post;
 
 	h = hash_addr(ht->hsize, post_ip);
 	if (!hlist_empty(&ht->post[h]))
@@ -820,7 +820,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	struct post_ip postnat;
 	struct natmap_pre *pre;			/* new entry  */
 	struct natmap_post *post;		/* new entry  */
-	struct natmap_pre *pre_chk = NULL;	/* old entry  */
+	struct natmap_pre *pre_chk;		/* old entry  */
 	bool warn = true;
 	int add;
 
@@ -1045,10 +1045,13 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			pre_chk->postnat.from = postnat.from;
 			pre_chk->postnat.to = postnat.to;
 			pre_chk->postnat.cidr = postnat.cidr;
+
 			natmap_post_del(ht, pre_chk->post);
-			post->pre = pre_chk;
 			pre_chk->post = post;
-			natmap_post_add(ht, pre_chk->post);
+			post->pre = pre_chk;
+			natmap_post_add(ht, post);
+			post = NULL;
+
 			spin_unlock_bh(&pre_chk->lock_bh);
 		} else {
 			pre->prenat.addr = prenat.addr;
