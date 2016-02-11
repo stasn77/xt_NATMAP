@@ -93,7 +93,7 @@ struct natmap_ent {
 struct natmap_post_ent {
 	struct hlist_node node;		/* hash bucket list */
 	spinlock_t lock_bh;
-	__be32 postnat_addr;		/* postnat addr */
+//	__be32 postnat_addr;		/* postnat addr */
 	struct natmap_ent *ent;		/* pointer to prenat ent */
 	struct rcu_head rcu;		/* destruction call list */
 };
@@ -105,7 +105,6 @@ struct xt_natmap_htable {
 	__u8 mode;			/* src or skb mode, pers & drop */
 	spinlock_t lock;		/* write access to hash */
 	unsigned int ent_count;		/* currently entities linked */
-	unsigned int post_ent_count;	/* currently postnat entities linked */
 	unsigned int hsize;		/* hash array size */
 	unsigned int cidr_map[33];	/* count of prefixes */
 	struct net *net;		/* for destruction */
@@ -209,6 +208,7 @@ static void
 natmap_hash_grow(struct xt_natmap_htable *ht)
 {
 	struct natmap_ent *ent;
+	struct natmap_post_ent *post_ent;
 	struct hlist_node *n;
 	struct hlist_head *nhash, *ohash;
 	unsigned int nsize, osize, i;
@@ -217,10 +217,8 @@ natmap_hash_grow(struct xt_natmap_htable *ht)
 	nhash = natmap_hash_zalloc(nsize);
 	if (nhash == NULL)
 		return;
-
 	ohash = ht->hash;
 	osize = ht->hsize;
-
 	ht->hsize = nsize;
 	for (i = 0; i < osize; i++) {
 		hlist_for_each_entry_safe(ent, n, &ohash[i], node) {
@@ -231,7 +229,21 @@ natmap_hash_grow(struct xt_natmap_htable *ht)
 		}
 	}
 	ht->hash = nhash;
+	kvfree(ohash);
 
+	nhash = natmap_hash_zalloc(nsize);
+	if (nhash == NULL)
+		return;
+	ohash = ht->post;
+	for (i = 0; i < osize; i++) {
+		hlist_for_each_entry_safe(post_ent, n, &ohash[i], node) {
+			spin_lock_bh(&post_ent->lock_bh);
+			hlist_add_head_rcu(&post_ent->node, &nhash[hash_addr(
+			    nsize, post_ent->ent->postnat.from)]);
+			spin_unlock_bh(&post_ent->lock_bh);
+		}
+	}
+	ht->post = nhash;
 	kvfree(ohash);
 }
 
@@ -254,9 +266,7 @@ natmap_post_ent_add(struct xt_natmap_htable *ht, struct natmap_post_ent *post_en
 {
 	/* add each address into htable hash */
 	hlist_add_head_rcu(&post_ent->node, &ht->post[hash_addr(
-		ht->hsize, post_ent->postnat_addr)]);
-
-	ht->post_ent_count++;
+		ht->hsize, post_ent->ent->postnat.from)]);
 }
 
 /* get entity by prenat address */
@@ -297,28 +307,12 @@ const __be32 postnat_addr)
 	h = hash_addr(ht->hsize, postnat_addr);
 	if (!hlist_empty(&ht->post[h]))
 		hlist_for_each_entry_rcu(post_ent, &ht->post[h], node)
-				if (post_ent->postnat_addr == postnat_addr)
+				if (post_ent->ent->postnat.from == postnat_addr)
 					return post_ent->ent;
 
 	return NULL;
 }
-/*
-static inline struct natmap_ent *
-natmap_ent_rfind(const struct xt_natmap_htable *ht,
-const __be32 postnat_addr)
-{
-	unsigned int i;
-	struct natmap_ent *ent = NULL;
 
-	for (i = 0; i < ht->hsize; i++)
-		if (!hlist_empty(&ht->hash[i]))
-			hlist_for_each_entry_rcu(ent, &ht->hash[i], node)
-				if (ent->postnat.from == postnat_addr)
-					return ent;
-
-	return NULL;
-}
-*/
 /* allocate named hash table, register its proc entry */
 static int
 htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
@@ -358,7 +352,6 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 	ht->use = 1;
 	ht->hsize = hsize;
 	ht->ent_count = 0;
-	ht->post_ent_count = 0;
 	ht->mode = tinfo->mode;
 	strcpy(ht->name, tinfo->name);
 
@@ -427,9 +420,6 @@ natmap_post_ent_del(struct xt_natmap_htable *ht, struct natmap_post_ent *post_en
 	hlist_del_rcu(&post_ent->node);
 
 	call_rcu(&post_ent->rcu, natmap_post_ent_free_rcu);
-
-	BUG_ON(ht->post_ent_count == 0);
-	ht->post_ent_count--;
 }
 
 /* destroy linked content of hash table */
@@ -442,25 +432,32 @@ const struct postnat_ent *postnat)
 
 	for (i = 0; i < ht->hsize; i++) {
 		struct natmap_ent *ent;
+		struct natmap_post_ent *post_ent;
 		struct hlist_node *n;
 
 		spin_lock(&ht->lock);
-		hlist_for_each_entry_safe(ent, n, &ht->hash[i], node)
-			if (postnat) {
-				if (memcmp(&ent->postnat, postnat,
-				    sizeof(struct postnat_ent)) == 0) {
-					natmap_ent_del(ht, ent);
+		if (!postnat)
+			hlist_for_each_entry_safe(ent, n, &ht->hash[i], node)
+				if (stat) {
+					memset(&ent->stat, 0, sizeof(ent->stat));
+				} else {
 					if (ent->post_ent)
-						natmap_post_ent_del(ht,
-						    ent->post_ent);
+						natmap_post_ent_del(ht, ent->post_ent);
+					natmap_ent_del(ht, ent);
 				}
-			} else if (stat) {
-				memset(&ent->stat, 0, sizeof(ent->stat));
-			} else {
-				natmap_ent_del(ht, ent);
-				if (ent->post_ent)
-					natmap_post_ent_del(ht, ent->post_ent);
-			}
+		else
+			hlist_for_each_entry_safe(post_ent, n, &ht->post[i], node)
+				if (stat) {
+					memset(&post_ent->ent->stat, 0, sizeof(post_ent->ent->stat));
+				} else {
+					if (post_ent->ent &&
+					    (memcmp(&post_ent->ent->postnat, postnat,
+						sizeof(struct postnat_ent)) == 0)) {
+						natmap_ent_del(ht, post_ent->ent);
+						natmap_post_ent_del(ht, post_ent);
+					}
+				}
+
 		spin_unlock(&ht->lock);
 		cond_resched();
 	}
@@ -496,7 +493,6 @@ htable_destroy(struct xt_natmap_htable *ht)
 		remove_proc_entry(ht->name, natmap_net->ipt_natmap);
 
 	htable_cleanup(ht, false, NULL);
-	BUG_ON(ht->post_ent_count != 0);
 	BUG_ON(ht->ent_count != 0);
 	kvfree(ht->post);
 	kvfree(ht->hash);
@@ -560,15 +556,14 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 
 		postnat_addr = ip_hdr(skb)->daddr;
 
-		pr_info("Postnat check: %pI4\n", &postnat_addr);
-
 		ent = natmap_ent_rfind(ht, postnat_addr);
 		if (ent) {
 			spin_lock(&ent->lock_bh);
 			prenat_addr = ent->prenat.addr;
 			spin_unlock(&ent->lock_bh);
 
-			pr_info("Postnat found: %pI4 -> %pI4\n", &postnat_addr, &prenat_addr);
+			pr_info("Postnat found: %pI4 -> %pI4\n",
+			    &postnat_addr, &prenat_addr);
 			memset(&newrange, 0, sizeof(newrange));
 			newrange.flags = mr->flags | NF_NAT_RANGE_MAP_IPS;
 			newrange.min_addr.ip = prenat_addr;
@@ -1045,6 +1040,10 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ent_chk->postnat.from = postnat.from;
 			ent_chk->postnat.to = postnat.to;
 			ent_chk->postnat.cidr = postnat.cidr;
+			natmap_post_ent_del(ht, ent_chk->post_ent);
+			ent_chk->post_ent = post_ent;
+			post_ent->ent = ent_chk;
+			natmap_post_ent_add(ht, ent_chk->post_ent);
 			spin_unlock_bh(&ent_chk->lock_bh);
 		} else {
 			ent->prenat.addr = prenat.addr;
@@ -1054,7 +1053,6 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ent->postnat.cidr = postnat.cidr;
 			ent->post_ent = post_ent;
 			post_ent->ent = ent;
-			post_ent->postnat_addr = postnat.from;
 
 			/* Rehash when load factor exceeds 0.75 */
 			if (ht->ent_count * 4 > ht->hsize * 3) {
