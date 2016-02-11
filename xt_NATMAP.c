@@ -42,7 +42,7 @@
 #include <linux/version.h>
 #include "xt_NATMAP.h"
 
-#define XT_NATMAP_VERSION "0.1.6"
+#define XT_NATMAP_VERSION "0.2.1"
 #include "version.h"
 #ifdef GIT_VERSION
 # undef XT_NATMAP_VERSION
