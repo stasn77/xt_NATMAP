@@ -748,6 +748,19 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 	unsigned int *bucket;
 
 	spin_lock_bh(&ht->lock);
+
+	if (!(*pos))
+		seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: "
+						    "%s%s%s; flags: %s%s%s%s\n",
+		    ht->name, ht->count, ht->hsize,
+		    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
+		    (ht->mode & XT_NATMAP_MARK) ? "mark"  : "",
+		    (ht->mode & XT_NATMAP_ADDR) ? "addr"  : "",
+		    (ht->mode & XT_NATMAP_PERS) ? "+persistent" : "-persistent",
+		    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
+		    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
+		    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
+
 	if (*pos >= ht->hsize)
 		return NULL;
 
@@ -755,17 +768,7 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 	if (!bucket)
 		return ERR_PTR(-ENOMEM);
 	*bucket = *pos;
-/*
-	seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s%s\n",
-	    ht->name, ht->count, ht->hsize,
-	    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
-	    (ht->mode & XT_NATMAP_MARK) ? "mark"  : "",
-	    (ht->mode & XT_NATMAP_ADDR) ? "addr"  : "",
-	    (ht->mode & XT_NATMAP_PERS) ? "+persistent" : "-persistent",
-	    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
-	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
-	    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
-*/
+
 	return bucket;
 }
 
