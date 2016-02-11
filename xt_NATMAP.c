@@ -188,15 +188,17 @@ natmap_hash_zalloc(unsigned int hsize)
 }
 
 static void
-natmap_hash_grow(struct xt_natmap_htable *ht)
+natmap_hash_change(struct xt_natmap_htable *ht, size_t nsize)
 {
 	struct natmap_pre *pre;
 	struct natmap_post *post;
 	struct hlist_node *n;
 	struct hlist_head *nhash, *ohash;
-	unsigned int nsize, osize, i;
+	unsigned int osize, i;
 
-	nsize = ht->hsize * 2;
+	if (nsize < 256)
+		return;
+
 	nhash = natmap_hash_zalloc(nsize);
 	if (nhash == NULL)
 		return;
@@ -228,6 +230,9 @@ natmap_hash_grow(struct xt_natmap_htable *ht)
 	}
 	ht->post = nhash;
 	kvfree(ohash);
+
+	pr_info("Changed hash size %u -> %lu\n",
+		osize, nsize);
 }
 
 /* register entry into hash table */
@@ -750,7 +755,7 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 	if (!bucket)
 		return ERR_PTR(-ENOMEM);
 	*bucket = *pos;
-
+/*
 	seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s%s\n",
 	    ht->name, ht->count, ht->hsize,
 	    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
@@ -760,7 +765,7 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 	    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
 	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
 	    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
-
+*/
 	return bucket;
 }
 
@@ -801,13 +806,26 @@ static int
 natmap_proc_open(struct inode *inode, struct file *file)
 {
 	int ret = seq_open(file, &natmap_seq_ops);
+//	struct xt_natmap_htable *ht = NULL;
 
 	if (!ret) {
 		struct seq_file *sf = file->private_data;
 
 		sf->private = PDE_DATA(inode);
+//		ht = sf->private;
 	}
-
+/*
+	if (ret && ht)
+	seq_printf((struct seq_file *)file, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s%s\n",
+	    ht->name, ht->count, ht->hsize,
+	    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
+	    (ht->mode & XT_NATMAP_MARK) ? "mark"  : "",
+	    (ht->mode & XT_NATMAP_ADDR) ? "addr"  : "",
+	    (ht->mode & XT_NATMAP_PERS) ? "+persistent" : "-persistent",
+	    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
+	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
+	    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
+*/
 	return ret;
 }
 
@@ -1041,18 +1059,22 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	if (add == 1) {
 		if (pre_chk) {
 			/* update */
-			spin_lock_bh(&pre_chk->lock_bh);
-			pre_chk->postnat.from = postnat.from;
-			pre_chk->postnat.to = postnat.to;
-			pre_chk->postnat.cidr = postnat.cidr;
+			if (memcmp(&pre_chk->postnat, &postnat,
+			    sizeof(struct post_ip))) {
+				spin_lock_bh(&pre_chk->lock_bh);
 
-			natmap_post_del(ht, pre_chk->post);
-			pre_chk->post = post;
-			post->pre = pre_chk;
-			natmap_post_add(ht, post);
-			post = NULL;
+				pre_chk->postnat.from = postnat.from;
+				pre_chk->postnat.to = postnat.to;
+				pre_chk->postnat.cidr = postnat.cidr;
 
-			spin_unlock_bh(&pre_chk->lock_bh);
+				natmap_post_del(ht, pre_chk->post);
+				pre_chk->post = post;
+				post->pre = pre_chk;
+				natmap_post_add(ht, post);
+				post = NULL;
+
+				spin_unlock_bh(&pre_chk->lock_bh);
+			}
 		} else {
 			pre->prenat.addr = prenat.addr;
 			pre->prenat.cidr = prenat.cidr;
@@ -1063,12 +1085,14 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			post->pre = pre;
 
 			/* Rehash when load factor exceeds 0.75 */
-			if (ht->count * 4 > ht->hsize * 3) {
+			if (ht->count * 4 > ht->hsize * 3)
+				natmap_hash_change(ht, ht->hsize * 2);
+/*			if (ht->count * 4 > ht->hsize * 3) {
 				pr_info("Growing hash size %u -> %u\n",
 				    ht->hsize, ht->hsize * 2);
 				natmap_hash_grow(ht);
 			}
-			natmap_pre_add(ht, pre);
+*/			natmap_pre_add(ht, pre);
 			natmap_post_add(ht, post);
 			pre = NULL;
 			post = NULL;
@@ -1076,6 +1100,9 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	} else if (pre_chk) {
 		natmap_post_del(ht, pre_chk->post);
 		natmap_pre_del(ht, pre_chk);
+
+		if (ht->count * 2 < ht->hsize)
+			natmap_hash_change(ht, ht->hsize / 2);
 	}
 
 	spin_unlock(&ht->lock);
