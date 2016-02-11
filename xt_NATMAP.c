@@ -495,8 +495,8 @@ htable_get(struct net *net, struct xt_natmap_tginfo *tinfo)
 				pr_err("Mode differs!\n");
 				return -EINVAL;
 			}
-*/			ht->mode |= tinfo->mode;
-			ht->use++;
+			ht->mode |= tinfo->mode;
+*/			ht->use++;
 			tinfo->ht = ht;
 			return 0;
 		}
@@ -806,26 +806,13 @@ static int
 natmap_proc_open(struct inode *inode, struct file *file)
 {
 	int ret = seq_open(file, &natmap_seq_ops);
-//	struct xt_natmap_htable *ht = NULL;
 
 	if (!ret) {
 		struct seq_file *sf = file->private_data;
 
 		sf->private = PDE_DATA(inode);
-//		ht = sf->private;
 	}
-/*
-	if (ret && ht)
-	seq_printf((struct seq_file *)file, "# name: %s; entities: %u; hash size: %u; mode: %s%s%s; flags: %s%s%s%s\n",
-	    ht->name, ht->count, ht->hsize,
-	    (ht->mode & XT_NATMAP_PRIO) ? "prio"  : "",
-	    (ht->mode & XT_NATMAP_MARK) ? "mark"  : "",
-	    (ht->mode & XT_NATMAP_ADDR) ? "addr"  : "",
-	    (ht->mode & XT_NATMAP_PERS) ? "+persistent" : "-persistent",
-	    (ht->mode & XT_NATMAP_DROP) ? ", +hotdrop"  : ", -hotdrop",
-	    (ht->mode & XT_NATMAP_CGNT) ? ", +cg-nat"   : ", -cg-nat",
-	    (ht->mode & XT_NATMAP_2WAY) ? ", +two-way"  : ", -two-way");
-*/
+
 	return ret;
 }
 
@@ -1087,12 +1074,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			/* Rehash when load factor exceeds 0.75 */
 			if (ht->count * 4 > ht->hsize * 3)
 				natmap_hash_change(ht, ht->hsize * 2);
-/*			if (ht->count * 4 > ht->hsize * 3) {
-				pr_info("Growing hash size %u -> %u\n",
-				    ht->hsize, ht->hsize * 2);
-				natmap_hash_grow(ht);
-			}
-*/			natmap_pre_add(ht, pre);
+			natmap_pre_add(ht, pre);
 			natmap_post_add(ht, post);
 			pre = NULL;
 			post = NULL;
