@@ -357,7 +357,7 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 
 	hlist_add_head(&ht->node, &natmap_net->htables);
 
-	pr_info("Create target: %s (%s%s%s%s%s%s)\n", tinfo->name,
+	pr_info("Create table: %s (%s%s%s%s%s%s)\n", tinfo->name,
 	    (tinfo->mode & XT_NATMAP_PRIO) ? "mode: prio"    : "",
 	    (tinfo->mode & XT_NATMAP_MARK) ? "mode: mark"    : "",
 	    (tinfo->mode & XT_NATMAP_ADDR) ? "mode: addr"    : "",
@@ -441,7 +441,7 @@ natmap_table_flush(struct xt_natmap_htable *ht, const bool stat)
 }
 
 static void
-natmap_postnat_del(struct xt_natmap_htable *ht,
+natmap_post_flush(struct xt_natmap_htable *ht,
 struct post_ip *postnat)
 {
 	struct natmap_post *post;
@@ -472,6 +472,8 @@ htable_destroy(struct xt_natmap_htable *ht)
 	 * proc entries */
 	if (natmap_net->ipt_natmap)
 		remove_proc_entry(ht->name, natmap_net->ipt_natmap);
+
+	pr_info("Remove table: %s \n", ht->name);
 
 	htable_cleanup(ht, false);
 	BUG_ON(ht->count != 0);
@@ -977,7 +979,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 				pr_info("Del all entries where postnat = %pI4-%pI4\n",
 				    &postnat.from, &postnat.to);
 		}
-		natmap_postnat_del(ht, &postnat);
+		natmap_post_flush(ht, &postnat);
 		return 0;
 	} else if (ht->mode & XT_NATMAP_ADDR) {
 		if (!in4_pton(c1, strlen(c1), (u8 *)&prenat.addr, -1, &c2)) {
