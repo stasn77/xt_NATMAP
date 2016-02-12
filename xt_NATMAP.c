@@ -491,12 +491,20 @@ htable_get(struct net *net, struct xt_natmap_tginfo *tinfo)
 
 	hlist_for_each_entry(ht, &natmap_net->htables, node)
 		if (!strcmp(tinfo->name, ht->name)) {
-/*			if (tinfo->mode != ht->mode) {
-				pr_err("Mode differs!\n");
+			if (tinfo->pre_routing) {
+				if (!(ht->mode & XT_NATMAP_ADDR) ||
+				    !(ht->mode & XT_NATMAP_2WAY)) {
+					pr_err("Target with same name in "
+					"POSTROUTING hash wrong mode/flags, "
+					"<%s>\n", tinfo->name);
+					return -EINVAL;
+				}
+			} else if (tinfo->mode != ht->mode) {
+				pr_err("Mode/flags differ from previous "
+				    "declaration, <%s>\n", tinfo->name);
 				return -EINVAL;
 			}
-			ht->mode |= tinfo->mode;
-*/			ht->use++;
+			ht->use++;
 			tinfo->ht = ht;
 			return 0;
 		}
@@ -638,8 +646,8 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	/* iptables rule addition chain */
 {
 	struct net *net = par->net;
-	struct xt_natmap_tginfo *tginfo = par->targinfo;
-	const struct nf_nat_range *mr = &tginfo->range;
+	struct xt_natmap_tginfo *tinfo = par->targinfo;
+	const struct nf_nat_range *mr = &tinfo->range;
 	int ret = 0;
 
 	if (!(mr->flags & NF_NAT_RANGE_MAP_IPS)) {
@@ -647,19 +655,21 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 		return -EINVAL;
 	}
 
-	if (tginfo->name[sizeof(tginfo->name) - 1] != '\0')
+	if (tinfo->name[sizeof(tinfo->name) - 1] != '\0')
 		return -EINVAL;
 
 	if (par->hook_mask & (1 << NF_INET_PRE_ROUTING)) {
-		if (!(tginfo->mode & (XT_NATMAP_ADDR | XT_NATMAP_2WAY))) {
-			pr_err("No any mode/flags allowed in PREROUTING!\n");
+		if (!(tinfo->mode & (XT_NATMAP_ADDR | XT_NATMAP_2WAY))) {
+			pr_err("No any mode/flags allowed in PREROUTING, except"
+			" nm-mode addr and nm-2way, <%s>!\n", tinfo->name);
 			return -EINVAL;
 		}
-		tginfo->mode |= XT_NATMAP_2WAY;
+		tinfo->pre_routing = true;
+		tinfo->mode |= XT_NATMAP_2WAY;
 	}
 
 	mutex_lock(&natmap_mutex);
-	ret = htable_get(net, tginfo);
+	ret = htable_get(net, tinfo);
 	mutex_unlock(&natmap_mutex);
 	return ret;
 }
@@ -987,7 +997,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			prenat.addr &= cidr2mask[prenat.cidr];
 		}
 		if (!disable_log)
-			pr_info("%s %pI4/%2u -> %pI4-%pI4, <%s>\n",
+			pr_info("%s %pI4/%2u => %pI4-%pI4, <%s>\n",
 			    (add == 1) ? "Add" : "Del", &prenat.addr, prenat.cidr,
 				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_MARK) {
@@ -996,7 +1006,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			return -EINVAL;
 		}
 		if (!disable_log)
-			pr_info("%s 0x%x -> %pI4-%pI4, <%s>\n",
+			pr_info("%s 0x%x => %pI4-%pI4, <%s>\n",
 			    (add == 1) ? "Add" : "Del", prenat.addr,
 				&postnat.from, &postnat.to, ht->name);
 	} else if (ht->mode & XT_NATMAP_PRIO) {
@@ -1008,7 +1018,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		}
 		prenat.addr = TC_H_MAKE(maj<<16, min);
 		if (!disable_log)
-			pr_info("%s %04x:%04x -> %pI4-%pI4, <%s>\n",
+			pr_info("%s %04x:%04x => %pI4-%pI4, <%s>\n",
 			    (add == 1) ? "Add" : "Del", maj, min,
 				&postnat.from, &postnat.to, ht->name);
 	}
