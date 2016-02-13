@@ -484,7 +484,7 @@ htable_destroy(struct xt_natmap_htable *ht)
 
 /* allocate htable caused by target insertion with iptables */
 static int
-htable_get(struct net *net, struct xt_natmap_tginfo *tinfo)
+htable_get(struct net *net, struct xt_natmap_tginfo *tinfo, const bool pre_r)
 	/* iptables rule addition chain */
 	/* under natmap_mutex */
 {
@@ -493,11 +493,11 @@ htable_get(struct net *net, struct xt_natmap_tginfo *tinfo)
 
 	hlist_for_each_entry(ht, &natmap_net->htables, node)
 		if (!strcmp(tinfo->name, ht->name)) {
-			if (tinfo->pre_routing) {
+			if (pre_r) {
 				if (!(ht->mode & XT_NATMAP_ADDR) ||
 				    !(ht->mode & XT_NATMAP_2WAY)) {
 					pr_err("Target with same name in "
-					"POSTROUTING hash wrong mode/flags, "
+					"POSTROUTING must be addr & 2way, "
 					"<%s>\n", tinfo->name);
 					return -EINVAL;
 				}
@@ -650,6 +650,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	struct net *net = par->net;
 	struct xt_natmap_tginfo *tinfo = par->targinfo;
 	const struct nf_nat_range *mr = &tinfo->range;
+	bool pre_r = false;
 	int ret = 0;
 
 	if (!(mr->flags & NF_NAT_RANGE_MAP_IPS)) {
@@ -666,12 +667,12 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 			" nm-mode addr and nm-2way, <%s>!\n", tinfo->name);
 			return -EINVAL;
 		}
-		tinfo->pre_routing = true;
+		pre_r = true;
 		tinfo->mode |= XT_NATMAP_2WAY;
 	}
 
 	mutex_lock(&natmap_mutex);
-	ret = htable_get(net, tinfo);
+	ret = htable_get(net, tinfo, pre_r);
 	mutex_unlock(&natmap_mutex);
 	return ret;
 }
@@ -728,8 +729,9 @@ natmap_seq_ent_show(struct natmap_pre *pre, int mode, struct seq_file *s)
 		seq_printf(s, " => %15pI4-%-15pI4",
 		    &pre->postnat.from, &pre->postnat.to);
 
-	seq_printf(s, "  stat: %u/%llu",
-	    pre->stat.pkts, pre->stat.bytes);
+	if (mode & XT_NATMAP_STAT)
+		seq_printf(s, "  %u/%llu",
+		    pre->stat.pkts, pre->stat.bytes);
 	seq_puts(s, "\n");
 
 	spin_unlock_bh(&pre->lock_bh);
@@ -761,7 +763,7 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 
 	spin_lock_bh(&ht->lock);
 
-	if (!(*pos))
+	if ((ht->mode & XT_NATMAP_STAT) && !(*pos))
 		seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: "
 						    "%s%s%s; flags: %s%s%s%s\n",
 		    ht->name, ht->count, ht->hsize,
@@ -888,6 +890,10 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			ht->mode &= ~XT_NATMAP_CGNT;
 			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
 			return 0;
+		} else if (strcmp(c1, "-stat") == 0) {
+			ht->mode &= ~XT_NATMAP_STAT;
+			pr_info("Statistics OFF: <%s>\n", ht->name);
+			return 0;
 		} else if ((c2 = strchr(c1, '='))) {
 			if ((c2 - 1) == c1) {
 				add = -2;
@@ -908,6 +914,10 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		} else if (strcmp(c1, "+cgnat") == 0) {
 			ht->mode |= XT_NATMAP_CGNT;
 			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
+			return 0;
+		} else if (strcmp(c1, "+stat") == 0) {
+			ht->mode |= XT_NATMAP_STAT;
+			pr_info("Statistics OFF: <%s>\n", ht->name);
 			return 0;
 		}
 		add = 1;

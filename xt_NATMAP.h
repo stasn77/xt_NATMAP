@@ -31,13 +31,14 @@ enum {
 	XT_NATMAP_CGNT		= 1 << 5,
 	XT_NATMAP_2WAY		= 1 << 6,
 
+	XT_NATMAP_STAT		= 1 << 7,
+
 	XT_NATMAP_NAME_LEN	= 32,
 };
 
 struct xt_natmap_tginfo {
 	struct nf_nat_range range;
 	__u8 mode;
-	bool pre_routing;
 	char name[XT_NATMAP_NAME_LEN];
 
 	/* values below only used in kernel */
