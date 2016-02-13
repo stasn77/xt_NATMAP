@@ -661,6 +661,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	if (tinfo->name[sizeof(tinfo->name) - 1] != '\0')
 		return -EINVAL;
 
+	tinfo->mode |= XT_NATMAP_STAT;
 	if (par->hook_mask & (1 << NF_INET_PRE_ROUTING)) {
 		if (!(tinfo->mode & (XT_NATMAP_ADDR | XT_NATMAP_2WAY))) {
 			pr_err("No any mode/flags allowed in PREROUTING, except"
@@ -711,8 +712,9 @@ natmap_seq_ent_show(struct natmap_pre *pre, int mode, struct seq_file *s)
 	/* lock for consistent reads from the counters */
 	spin_lock_bh(&pre->lock_bh);
 
+	seq_puts(s, "@+");
 	if (mode & XT_NATMAP_ADDR)
-		seq_printf(s, "%16pI4/%-2u",
+		seq_printf(s, "%pI4/%u",
 		    &pre->prenat.addr, pre->prenat.cidr);
 	else if (mode & XT_NATMAP_PRIO)
 		seq_printf(s, "%04x:%04x",
@@ -721,12 +723,13 @@ natmap_seq_ent_show(struct natmap_pre *pre, int mode, struct seq_file *s)
 	else
 		seq_printf(s, "0x%08x",
 		    pre->prenat.addr);
+	seq_puts(s, "=");
 
 	if (pre->postnat.cidr)
-		seq_printf(s, " => %15pI4/%-15u",
+		seq_printf(s, "%pI4/%u",
 		    &pre->postnat.from, pre->postnat.cidr);
 	else
-		seq_printf(s, " => %15pI4-%-15pI4",
+		seq_printf(s, "%pI4-%pI4",
 		    &pre->postnat.from, &pre->postnat.to);
 
 	if (mode & XT_NATMAP_STAT)
@@ -864,6 +867,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	}
 	if (size < 1)
 		return -EINVAL;
+
 
 	switch (*c1) {
 	case '\n':
@@ -1127,7 +1131,7 @@ unlock_einval:
 	return -EINVAL;
 }
 
-static char proc_buf[100];
+static char proc_buf[150];
 
 static ssize_t
 natmap_proc_write(struct file *file, const char __user *input,
@@ -1148,6 +1152,8 @@ size_t size, loff_t *loff)
 
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
+		while (*p == ' ')
+			--p;
 		if (p == &proc_buf[size] || *p != '\n') {
 			/* unterminated command */
 			if (str == proc_buf) {
