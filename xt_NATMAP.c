@@ -733,7 +733,7 @@ natmap_seq_ent_show(struct natmap_pre *pre, int mode, struct seq_file *s)
 		    &pre->postnat.from, &pre->postnat.to);
 
 	if (mode & XT_NATMAP_STAT)
-		seq_printf(s, "  %u/%llu",
+		seq_printf(s, "  %u:%llu",
 		    pre->stat.pkts, pre->stat.bytes);
 	seq_puts(s, "\n");
 
@@ -1152,8 +1152,6 @@ size_t size, loff_t *loff)
 
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
-		while (*p == ' ')
-			--p;
 		if (p == &proc_buf[size] || *p != '\n') {
 			/* unterminated command */
 			if (str == proc_buf) {
