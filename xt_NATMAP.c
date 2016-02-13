@@ -55,11 +55,11 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION(XT_NATMAP_VERSION);
 MODULE_ALIAS("ipt_NATMAP");
 
-static unsigned int hashsize __read_mostly = 1024;
+static unsigned int hashsize __read_mostly = 256;
 static unsigned int disable_log __read_mostly = 0;
 module_param(hashsize, uint, 0400);
 MODULE_PARM_DESC(hashsize,
-		" inital hash size used to look up IPs (default: 1024)");
+		" inital hash size used to look up IPs (default: 256)");
 module_param(disable_log, uint, S_IRUSR);
 MODULE_PARM_DESC(disable_log,
 		" disables logging of bind/timeout events (default: 0)");
@@ -312,7 +312,7 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 	unsigned int sz;		/* (bytes) */
 
 	if (hsize < 256 || hsize > 1000000)
-		hsize = 1024;
+		hsize = 256;
 
 	sz = sizeof(struct xt_natmap_htable);
 	if (sz <= PAGE_SIZE)
@@ -428,6 +428,8 @@ htable_cleanup(struct xt_natmap_htable *ht, const bool stat)
 				natmap_pre_del(ht, pre);
 			}
 	}
+	if (!stat && ht->hsize > 256)
+		natmap_hash_change(ht, 256);
 	spin_unlock(&ht->lock);
 	cond_resched();
 }
@@ -1150,6 +1152,10 @@ size_t size, loff_t *loff)
 	for (p = proc_buf; p < &proc_buf[size]; ) {
 		char *str = p;
 
+		if (strchr(p, ' ')) {
+		    p = strsep(&str, " ");
+		    str = p;
+		}
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
 		if (p == &proc_buf[size] || *p != '\n') {
