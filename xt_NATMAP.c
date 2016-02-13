@@ -271,7 +271,7 @@ const __be32 prenat_addr, const u32 cidr)
 			h = hash_addr_mask(ht->hsize, a, c);
 
 			if (!hlist_empty(&ht->pre[h])) {
-				struct natmap_pre *pre = NULL;
+				struct natmap_pre *pre;
 
 				hlist_for_each_entry_rcu(pre,
 				    &ht->pre[h], node)
