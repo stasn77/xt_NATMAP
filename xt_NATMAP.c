@@ -558,8 +558,10 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		if (pre) {
 			spin_lock(&pre->lock_bh);
 			prenat_ip = pre->prenat.addr;
-			pre->stat.pkts++;
-			pre->stat.bytes += skb->len;
+			if (ht->mode & XT_NATMAP_STAT) {
+				pre->stat.pkts++;
+				pre->stat.bytes += skb->len;
+			}
 			spin_unlock(&pre->lock_bh);
 
 			memset(&newrange, 0, sizeof(newrange));
@@ -629,8 +631,10 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 			newrange.max_proto = mr->max_proto;
 		/*	newrange.flags |= NF_NAT_RANGE_PROTO_RANDOM_FULLY; */
 		}
-		pre->stat.pkts++;
-		pre->stat.bytes += skb->len;
+		if (ht->mode & XT_NATMAP_STAT) {
+			pre->stat.pkts++;
+			pre->stat.bytes += skb->len;
+		}
 		spin_unlock(&pre->lock_bh);
 
 		ret = nf_nat_setup_info(ct, &newrange, HOOK2MANIP(par->hooknum));
@@ -898,6 +902,7 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			return 0;
 		} else if (strcmp(c1, "-stat") == 0) {
 			ht->mode &= ~XT_NATMAP_STAT;
+			natmap_table_flush(ht, true);
 			pr_info("Statistics OFF: <%s>\n", ht->name);
 			return 0;
 		} else if ((c2 = strchr(c1, '='))) {
@@ -1152,10 +1157,8 @@ size_t size, loff_t *loff)
 	for (p = proc_buf; p < &proc_buf[size]; ) {
 		char *str = p;
 
-		if (strchr(p, ' ')) {
-		    p = strsep(&str, " ");
-		    str = p;
-		}
+		if (strchr(p, ' '))
+			str = strsep(&str, " ");
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
 		if (p == &proc_buf[size] || *p != '\n') {
