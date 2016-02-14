@@ -1155,10 +1155,11 @@ size_t size, loff_t *loff)
 		return -EFAULT;
 
 	for (p = proc_buf; p < &proc_buf[size]; ) {
-		char *str = p;
+		char *str;
 
 		if (strchr(p, ' '))
-			str = strsep(&str, " ");
+			p = strsep(&p, " ");
+		str = p;
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
 		if (p == &proc_buf[size] || *p != '\n') {
