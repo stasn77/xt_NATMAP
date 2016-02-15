@@ -57,10 +57,10 @@ MODULE_ALIAS("ipt_NATMAP");
 
 static unsigned int hashsize __read_mostly = 256;
 static unsigned int disable_log __read_mostly = 0;
-module_param(hashsize, uint, 0400);
+module_param(hashsize, uint, S_IRUSR);
 MODULE_PARM_DESC(hashsize,
 		" inital hash size used to look up IPs (default: 256)");
-module_param(disable_log, uint, S_IRUSR);
+module_param(disable_log, uint, S_IRUSR | S_IWUSR);
 MODULE_PARM_DESC(disable_log,
 		" disables logging of bind/timeout events (default: 0)");
 
@@ -231,8 +231,8 @@ natmap_hash_change(struct xt_natmap_htable *ht, size_t nsize)
 	ht->post = nhash;
 	kvfree(ohash);
 
-	pr_info("Changed hash size %u -> %lu\n",
-		osize, nsize);
+	if (!disable_log)
+		pr_info("Changed hash size %u -> %lu\n", osize, nsize);
 }
 
 /* register entry into hash table */
@@ -357,13 +357,14 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 
 	hlist_add_head(&ht->node, &natmap_net->htables);
 
-	pr_info("Create table: %s (%s%s%s%s%s%s)\n", tinfo->name,
-	    (tinfo->mode & XT_NATMAP_PRIO) ? "mode: prio"    : "",
-	    (tinfo->mode & XT_NATMAP_MARK) ? "mode: mark"    : "",
-	    (tinfo->mode & XT_NATMAP_ADDR) ? "mode: addr"    : "",
-	    (tinfo->mode & XT_NATMAP_PERS) ? ", +persistent" : "",
-	    (tinfo->mode & XT_NATMAP_DROP) ? ", +hotdrop"    : "",
-	    (tinfo->mode & XT_NATMAP_CGNT) ? ", +cg-nat"     : "");
+	if (!disable_log)
+		pr_info("Create table: %s (%s%s%s%s%s%s)\n", tinfo->name,
+		    (tinfo->mode & XT_NATMAP_PRIO) ? "mode: prio"    : "",
+		    (tinfo->mode & XT_NATMAP_MARK) ? "mode: mark"    : "",
+		    (tinfo->mode & XT_NATMAP_ADDR) ? "mode: addr"    : "",
+		    (tinfo->mode & XT_NATMAP_PERS) ? ", +persistent" : "",
+		    (tinfo->mode & XT_NATMAP_DROP) ? ", +hotdrop"    : "",
+		    (tinfo->mode & XT_NATMAP_CGNT) ? ", +cg-nat"     : "");
 
 	return 0;
 }
@@ -475,7 +476,8 @@ htable_destroy(struct xt_natmap_htable *ht)
 	if (natmap_net->ipt_natmap)
 		remove_proc_entry(ht->name, natmap_net->ipt_natmap);
 
-	pr_info("Remove table: %s \n", ht->name);
+	if (!disable_log)
+		pr_info("Remove table: %s \n", ht->name);
 
 	htable_cleanup(ht, false);
 	BUG_ON(ht->count != 0);
@@ -667,7 +669,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	if (tinfo->name[sizeof(tinfo->name) - 1] != '\0')
 		return -EINVAL;
 
-	tinfo->mode |= XT_NATMAP_STAT;
+/*	tinfo->mode |= XT_NATMAP_STAT; */
 	if (par->hook_mask & (1 << NF_INET_PRE_ROUTING)) {
 		if (!(tinfo->mode & (XT_NATMAP_ADDR | XT_NATMAP_2WAY))) {
 			pr_err("No any mode/flags allowed in PREROUTING, except"
@@ -1240,15 +1242,17 @@ __init natmap_tg_init(void)
 	err = xt_register_targets(natmap_tg_reg, ARRAY_SIZE(natmap_tg_reg));
 	if (err)
 		unregister_pernet_subsys(&natmap_net_ops);
-	pr_info(XT_NATMAP_VERSION " load %s, (hashsize=%u)\n",
-	    err ? "error" : "success", hashsize);
+	if (!disable_log)
+		pr_info(XT_NATMAP_VERSION " load %s, (hashsize=%u)\n",
+		    err ? "error" : "success", hashsize);
 	return err;
 }
 
 static void
 __exit natmap_tg_exit(void)
 {
-	pr_info("unload.\n");
+	if (!disable_log)
+		pr_info("unload module.\n");
 	xt_unregister_targets(natmap_tg_reg, ARRAY_SIZE(natmap_tg_reg));
 	unregister_pernet_subsys(&natmap_net_ops);
 }
