@@ -858,11 +858,8 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	int add;
 
 	/* make sure that size is enough for two decrements */
-	if (size < 2 || !c1 || !ht)
+	if (size < 1 || !c1 || !ht)
 		return -EINVAL;
-
-	/* strip trailing newline for better formatting of error messages */
-	c1[--size] = '\0';
 
 	/* rule format is: [@]+prenat_addr[/cidr]=postnat_from[-postnat_to]
 	 *             or: [@]+0xFWMARK=postnat_from[-postnat_to]
@@ -878,9 +875,6 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 
 
 	switch (*c1) {
-	case '\n':
-	case '#':
-		return 0;
 	case '/': /* flush table */
 		natmap_table_flush(ht, false);
 		pr_info("Flushing table <%s>\n", ht->name);
@@ -926,11 +920,11 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			return 0;
 		} else if (strcmp(c1, "+cgnat") == 0) {
 			ht->mode |= XT_NATMAP_CGNT;
-			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
+			pr_info("CG-NAT      ON: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "+stat") == 0) {
 			ht->mode |= XT_NATMAP_STAT;
-			pr_info("Statistics OFF: <%s>\n", ht->name);
+			pr_info("Statistics  ON: <%s>\n", ht->name);
 			return 0;
 		}
 		add = 1;
@@ -1157,17 +1151,15 @@ size_t size, loff_t *loff)
 		return -EFAULT;
 
 	for (p = proc_buf; p < &proc_buf[size]; ) {
-		char *str;
+		char *str = p;
 
-		if (strchr(p, ' '))
-			p = strsep(&p, " ");
-		str = p;
 		while (p < &proc_buf[size] && *p != '\n')
 			++p;
 		if (p == &proc_buf[size] || *p != '\n') {
 			/* unterminated command */
 			if (str == proc_buf) {
-				pr_err("Rule should end with '\\n'\n");
+				pr_err("Rule should end with '\\n',"
+					    " (cmd: %s)\n", str);
 				return -EINVAL;
 			} else {
 				/* Rewind to the beginning of incomplete
@@ -1177,9 +1169,19 @@ size_t size, loff_t *loff)
 				break;
 			}
 		}
-		++p;
-		if (parse_rule(ht, str, p - str))
+
+		while (str < p && *str == ' ')
+			++str;
+
+		/* strip line after first space */
+		str = strsep(&str, " ");
+		/* strip trailing newline for better formatting of error messages */
+		str[p - str] = '\0';
+
+		if (((*str != '#') && (*str != '\0'))
+		    && parse_rule(ht, str, p - str))
 			return -EINVAL;
+		++p;
 	}
 
 	*loff += p - proc_buf;
