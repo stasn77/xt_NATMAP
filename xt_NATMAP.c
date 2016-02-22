@@ -590,8 +590,11 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	else
 		prenat_ip = ip_hdr(skb)->saddr;
 
-	for (c = 32; (c >= 1) && (ht->cidr_map[c]) && (!pre); c--)
+	for (c = 32; (c >= 1) && (ht->cidr_map[c]); c--) {
 		pre = natmap_pre_find(ht, prenat_ip, c);
+		if (pre)
+			break;
+	}
 
 	if (pre) {
 		memset(&newrange, 0, sizeof(newrange));
