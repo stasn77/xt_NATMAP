@@ -262,38 +262,20 @@ static inline struct natmap_pre *
 natmap_pre_find(const struct xt_natmap_htable *ht,
 const __be32 prenat_addr, const u32 cidr)
 {
-	u32 h, c;
+	u32 h;
 	__be32 a;
 
-	if (cidr == 1) {
-		for (c = 32; c >= cidr; c--)
-			if (ht->cidr_map[c]) {
-				a = prenat_addr & cidr2mask[c];
-				h = hash_addr_mask(ht->hsize, a, c);
+	a = prenat_addr & cidr2mask[cidr];
+	h = hash_addr_mask(ht->hsize, a, cidr);
 
-				if (!hlist_empty(&ht->pre[h])) {
-					struct natmap_pre *pre;
+	if (!hlist_empty(&ht->pre[h])) {
+		struct natmap_pre *pre;
 
-					hlist_for_each_entry_rcu(pre,
-					    &ht->pre[h], node)
-						if ((pre->prenat.cidr == c) &&
-						    (pre->prenat.addr == a))
-							return pre;
-				}
-			}
-	} else {
-		a = prenat_addr & cidr2mask[cidr];
-		h = hash_addr_mask(ht->hsize, a, cidr);
-
-		if (!hlist_empty(&ht->pre[h])) {
-			struct natmap_pre *pre;
-
-			hlist_for_each_entry_rcu(pre,
-			    &ht->pre[h], node)
-				if ((pre->prenat.cidr == cidr) &&
-				    (pre->prenat.addr == a))
-					return pre;
-		}
+		hlist_for_each_entry_rcu(pre,
+		    &ht->pre[h], node)
+			if ((pre->prenat.cidr == cidr) &&
+			    (pre->prenat.addr == a))
+				return pre;
 	}
 
 	return NULL;
@@ -553,11 +535,12 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	struct xt_natmap_htable *ht = tginfo->ht;
 	const struct nf_nat_range *mr = &tginfo->range;
 	struct nf_nat_range newrange;
-	struct natmap_pre *pre;
+	struct natmap_pre *pre = NULL;
 	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
 	int ret = XT_CONTINUE;
 	__be32 prenat_ip, postnat_ip;
+	u32 c;
 
 	NF_CT_ASSERT(par->hooknum == NF_INET_POST_ROUTING ||
 		     par->hooknum == NF_INET_PRE_ROUTING);
@@ -607,7 +590,9 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	else
 		prenat_ip = ip_hdr(skb)->saddr;
 
-	pre = natmap_pre_find(ht, prenat_ip, 1);
+	for (c = 32; (c >= 1) && (ht->cidr_map[c]) && (!pre); c--)
+		pre = natmap_pre_find(ht, prenat_ip, c);
+
 	if (pre) {
 		memset(&newrange, 0, sizeof(newrange));
 		newrange.flags = mr->flags
