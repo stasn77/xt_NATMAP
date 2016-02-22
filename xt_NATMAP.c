@@ -265,21 +265,36 @@ const __be32 prenat_addr, const u32 cidr)
 	u32 h, c;
 	__be32 a;
 
-	for (c = 32; c >= cidr; c--)
-		if (ht->cidr_map[c]) {
-			a = prenat_addr & cidr2mask[c];
-			h = hash_addr_mask(ht->hsize, a, c);
+	if (cidr == 1) {
+		for (c = 32; c >= cidr; c--)
+			if (ht->cidr_map[c]) {
+				a = prenat_addr & cidr2mask[c];
+				h = hash_addr_mask(ht->hsize, a, c);
 
-			if (!hlist_empty(&ht->pre[h])) {
-				struct natmap_pre *pre;
+				if (!hlist_empty(&ht->pre[h])) {
+					struct natmap_pre *pre;
 
-				hlist_for_each_entry_rcu(pre,
-				    &ht->pre[h], node)
-					if ((pre->prenat.cidr == c) &&
-					    (pre->prenat.addr == a))
-						return pre;
+					hlist_for_each_entry_rcu(pre,
+					    &ht->pre[h], node)
+						if ((pre->prenat.cidr == c) &&
+						    (pre->prenat.addr == a))
+							return pre;
+				}
 			}
+	} else {
+		a = prenat_addr & cidr2mask[cidr];
+		h = hash_addr_mask(ht->hsize, a, cidr);
+
+		if (!hlist_empty(&ht->pre[h])) {
+			struct natmap_pre *pre;
+
+			hlist_for_each_entry_rcu(pre,
+			    &ht->pre[h], node)
+				if ((pre->prenat.cidr == cidr) &&
+				    (pre->prenat.addr == a))
+					return pre;
 		}
+	}
 
 	return NULL;
 }
@@ -546,8 +561,13 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 
 	NF_CT_ASSERT(par->hooknum == NF_INET_POST_ROUTING ||
 		     par->hooknum == NF_INET_PRE_ROUTING);
-	ct = nf_ct_get(skb, &ctinfo);
 
+	ct = nf_ct_get(skb, &ctinfo);
+/*
+	NF_CT_ASSERT(ct != NULL &&
+	    (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED ||
+	    ctinfo == IP_CT_RELATED_REPLY));
+*/
 	rcu_read_lock();
 
 	if (par->hooknum == NF_INET_PRE_ROUTING) {
