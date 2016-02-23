@@ -590,8 +590,9 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	else
 		prenat_ip = ip_hdr(skb)->saddr;
 
-	for (c = 32; (c >= 1) && (ht->cidr_map[c]); c--) {
-		pre = natmap_pre_find(ht, prenat_ip, c);
+	for (c = 32; c >= 1; c--) {
+		if (ht->cidr_map[c])
+			pre = natmap_pre_find(ht, prenat_ip, c);
 		if (pre)
 			break;
 	}
@@ -677,7 +678,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 	if (tinfo->name[sizeof(tinfo->name) - 1] != '\0')
 		return -EINVAL;
 
-/*	tinfo->mode |= XT_NATMAP_STAT; */
+	tinfo->mode |= XT_NATMAP_STAT;
 	if (par->hook_mask & (1 << NF_INET_PRE_ROUTING)) {
 		if (!(tinfo->mode & (XT_NATMAP_ADDR | XT_NATMAP_2WAY))) {
 			pr_err("No any mode/flags allowed in PREROUTING, except"
