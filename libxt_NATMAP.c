@@ -42,6 +42,7 @@ static void natmap_help(void)
 "  --nm-pers          Persistent mode when flushing NAT tables.\n"
 "  --nm-drop          Hotdrop mode for not-matching packets.\n"
 "  --nm-cgnt          Carrier-Grade NAT variant of postnat/cidr mode.\n"
+"  --nm-2way          Two-way 1:1 DNAT/SNAT mode.\n"
 "xt_NATMAP by: Stasn77 <stasn77@gmail.com>.\n");
 }
 
@@ -51,6 +52,7 @@ enum {
 	O_PERS,
 	O_DROP,
 	O_CGNT,
+	O_2WAY,
 };
 
 #define s struct xt_natmap_tginfo
@@ -61,6 +63,7 @@ static const struct xt_option_entry natmap_opts[] = {
 	{.name = "nm-pers", .id = O_PERS, .type = XTTYPE_NONE},
 	{.name = "nm-drop", .id = O_DROP, .type = XTTYPE_NONE},
 	{.name = "nm-cgnt", .id = O_CGNT, .type = XTTYPE_NONE},
+	{.name = "nm-2way", .id = O_2WAY, .type = XTTYPE_NONE},
 	XTOPT_TABLEEND,
 };
 #undef s
@@ -70,9 +73,15 @@ static int parse_mode(uint8_t *mode, const char *option_arg)
 	if (strcasecmp("prio", option_arg) == 0) {
 		*mode &= ~XT_NATMAP_ADDR;
 		*mode |= XT_NATMAP_PRIO;
+		if (*mode & XT_NATMAP_2WAY)
+			xtables_error(PARAMETER_PROBLEM,
+			    "PRIO mode is not possible with 2-way mode\n");
 	} else if (strcasecmp("mark", option_arg) == 0) {
 		*mode &= ~XT_NATMAP_ADDR;
 		*mode |= XT_NATMAP_MARK;
+		if (*mode & XT_NATMAP_2WAY)
+			xtables_error(PARAMETER_PROBLEM,
+			    "MARK mode is not possible with 2-way mode\n");
 	} else if (strcasecmp("addr", option_arg) == 0)
 		*mode |= XT_NATMAP_ADDR;
 	else
@@ -111,6 +120,12 @@ static void natmap_parse(struct xt_option_call *cb)
 	case O_CGNT:
 		info->mode |= XT_NATMAP_CGNT;
 		break;
+	case O_2WAY:
+		if (!(info->mode & XT_NATMAP_ADDR))
+			xtables_error(PARAMETER_PROBLEM,
+			    "2-way mode only available with ADDR mode\n");
+		info->mode |= XT_NATMAP_2WAY;
+		break;
 	}
 }
 
@@ -140,6 +155,8 @@ int numeric)
 		printf(" drop");
 	if (tginfo->mode & XT_NATMAP_CGNT)
 		printf(" cgnt");
+	if (tginfo->mode & XT_NATMAP_2WAY)
+		printf(" 2way");
 }
 
 static void natmap_save(const void *ip, const struct xt_entry_target *target)
@@ -154,6 +171,8 @@ static void natmap_save(const void *ip, const struct xt_entry_target *target)
 		printf(" --nm-drop");
 	if (info->mode & XT_NATMAP_CGNT)
 		printf(" --nm-cgnt");
+	if (info->mode & XT_NATMAP_2WAY)
+		printf(" --nm-2way");
 	if (info->mode & XT_NATMAP_MODE) {
 		fputs(" --nm-mode ", stdout);
 		print_mode(info->mode);

@@ -29,6 +29,9 @@ enum {
 	XT_NATMAP_DROP		= 1 << 4,
 
 	XT_NATMAP_CGNT		= 1 << 5,
+	XT_NATMAP_2WAY		= 1 << 6,
+
+	XT_NATMAP_STAT		= 1 << 7,
 
 	XT_NATMAP_NAME_LEN	= 32,
 };
