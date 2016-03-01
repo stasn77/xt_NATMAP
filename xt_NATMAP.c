@@ -345,12 +345,8 @@ htable_create(struct net *net, struct xt_natmap_tginfo *tinfo)
 	ht->pde = proc_create_data(tinfo->name, 0644, natmap_net->ipt_natmap,
 		    &natmap_fops, ht);
 	if (ht->pde == NULL) {
-<<<<<<< HEAD
 		kvfree(ht->pre);
 		kvfree(ht->post);
-=======
-		kvfree(ht->hash);
->>>>>>> master
 		kvfree(ht);
 		return -ENOMEM;
 	}
