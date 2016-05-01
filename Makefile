@@ -1,5 +1,4 @@
-#KVER   ?= $(shell uname -r)
-KVER   ?= 4.4.8+
+KVER   ?= $(shell uname -r)
 KDIR   ?= /lib/modules/$(KVER)/build/
 DEPMOD  = /sbin/depmod -a
 CC     ?= gcc
