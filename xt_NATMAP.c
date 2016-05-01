@@ -886,29 +886,35 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	switch (*c1) {
 	case '/': /* flush table */
 		natmap_table_flush(ht, false);
-		pr_info("Flushing table <%s>\n", ht->name);
+		if (!disable_log)
+			pr_info("Flushing table <%s>\n", ht->name);
 		return 0;
 	case ':': /* clear stats */
 		natmap_table_flush(ht, true);
-		pr_info("Clearing stats of table <%s>\n", ht->name);
+		if (!disable_log)
+			pr_info("Clearing stats of table <%s>\n", ht->name);
 		return 0;
 	case '-':
 		if (strcmp(c1, "-hotdrop") == 0) {
 			ht->mode &= ~XT_NATMAP_DROP;
-			pr_info("Hotdrop    OFF: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Hotdrop    OFF: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "-persistent") == 0) {
 			ht->mode &= ~XT_NATMAP_PERS;
-			pr_info("Persistent OFF: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Persistent OFF: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "-cgnat") == 0) {
 			ht->mode &= ~XT_NATMAP_CGNT;
-			pr_info("CG-NAT     OFF: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("CG-NAT     OFF: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "-stat") == 0) {
 			ht->mode &= ~XT_NATMAP_STAT;
 			natmap_table_flush(ht, true);
-			pr_info("Statistics OFF: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Statistics OFF: <%s>\n", ht->name);
 			return 0;
 		} else if ((c2 = strchr(c1, '='))) {
 			if ((c2 - 1) == c1) {
@@ -921,19 +927,23 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	case '+':
 		if (strcmp(c1, "+hotdrop") == 0) {
 			ht->mode |= XT_NATMAP_DROP;
-			pr_info("Hotprop     ON: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Hotprop     ON: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "+persistent") == 0) {
 			ht->mode |= XT_NATMAP_PERS;
-			pr_info("Persistent  ON: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Persistent  ON: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "+cgnat") == 0) {
 			ht->mode |= XT_NATMAP_CGNT;
-			pr_info("CG-NAT      ON: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("CG-NAT      ON: <%s>\n", ht->name);
 			return 0;
 		} else if (strcmp(c1, "+stat") == 0) {
 			ht->mode |= XT_NATMAP_STAT;
-			pr_info("Statistics  ON: <%s>\n", ht->name);
+			if (!disable_log)
+				pr_info("Statistics  ON: <%s>\n", ht->name);
 			return 0;
 		}
 		add = 1;
