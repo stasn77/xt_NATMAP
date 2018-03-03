@@ -41,6 +41,7 @@
 #include <linux/mutex.h>
 #include <linux/version.h>
 #include "xt_NATMAP.h"
+#include "compat.h"
 
 #define XT_NATMAP_VERSION "0.2.1"
 #include "version.h"
@@ -541,10 +542,11 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	int ret = XT_CONTINUE;
 	__be32 prenat_ip, postnat_ip;
 	u32 c;
-
-	NF_CT_ASSERT(par->hooknum == NF_INET_POST_ROUTING ||
-		     par->hooknum == NF_INET_PRE_ROUTING);
-
+	unsigned int hooknum = xt_hooknum(par);
+/*
+	NF_CT_ASSERT(hooknum == NF_INET_POST_ROUTING ||
+		     hooknum == NF_INET_PRE_ROUTING);
+*/
 	ct = nf_ct_get(skb, &ctinfo);
 /*
 	NF_CT_ASSERT(ct != NULL &&
@@ -553,7 +555,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 */
 	rcu_read_lock();
 
-	if (par->hooknum == NF_INET_PRE_ROUTING) {
+	if (hooknum == NF_INET_PRE_ROUTING) {
 		if (!(ht->mode & XT_NATMAP_2WAY))
 			goto unlock;
 
@@ -578,7 +580,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 			newrange.min_proto = mr->min_proto;
 			newrange.max_proto = mr->max_proto;
 			ret = nf_nat_setup_info(ct, &newrange,
-					 HOOK2MANIP(par->hooknum));
+					 HOOK2MANIP(hooknum));
 		}
 		goto unlock;
 	}
@@ -648,7 +650,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		}
 		spin_unlock(&pre->lock_bh);
 
-		ret = nf_nat_setup_info(ct, &newrange, HOOK2MANIP(par->hooknum));
+		ret = nf_nat_setup_info(ct, &newrange, HOOK2MANIP(hooknum));
 		if (ret != NF_ACCEPT)
 			pr_err("No free tuples to setup nat\n");
 	} else if (ht->mode & XT_NATMAP_DROP)
