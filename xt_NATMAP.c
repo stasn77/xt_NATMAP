@@ -129,7 +129,11 @@ natmap_net *natmap_pernet(struct net *net)
 }
 
 /* need to declare this at the top */
+#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
 static const struct file_operations natmap_fops;
+#else
+static const struct proc_ops natmap_fops;
+#endif
 
 const __be32 cidr2mask[33] = {
 	0x00000000, 0x00000080, 0x000000C0, 0x000000E0,
@@ -1210,14 +1214,23 @@ size_t size, loff_t *loff)
 	return p - proc_buf;
 }
 
-static const struct file_operations natmap_fops = {
-	.owner		= THIS_MODULE,
-	.open		= natmap_proc_open,
-	.read		= seq_read,
-	.write		= natmap_proc_write,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
-};
+#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+#define PROC_OPS(s,o,r,w,l,d) static const struct file_operations s = { \
+        .open           = o, \
+        .read           = r, \
+        .write          = w, \
+        .llseek         = l, \
+        .release        = d \
+}
+#else
+#define PROC_OPS(s,o,r,w,l,d) static const struct proc_ops s = { \
+        .proc_open      = o , \
+        .proc_read      = r , \
+        .proc_write     = w , \
+        .proc_release   = d \
+}
+#endif
+PROC_OPS(natmap_fops, natmap_proc_open, seq_read, natmap_proc_write, seq_lseek, seq_release);
 
 /* net creation/destruction callbacks */
 static int
