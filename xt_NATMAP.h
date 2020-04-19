@@ -37,7 +37,7 @@ enum {
 };
 
 struct xt_natmap_tginfo {
-	struct nf_nat_range range;
+	struct nf_nat_range2 range;
 	__u8 mode;
 	char name[XT_NATMAP_NAME_LEN];
 

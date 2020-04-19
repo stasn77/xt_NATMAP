@@ -132,7 +132,7 @@ static void natmap_parse(struct xt_option_call *cb)
 static void natmap_init(struct xt_entry_target *target)
 {
 	struct xt_natmap_tginfo *tginfo = (struct xt_natmap_tginfo *)target->data;
-	struct nf_nat_range *mr = &tginfo->range;
+	struct nf_nat_range2 *mr = &tginfo->range;
 
 	mr->flags |= NF_NAT_RANGE_MAP_IPS;
 	strncpy(tginfo->name, "DEFAULT", XT_NATMAP_NAME_LEN);

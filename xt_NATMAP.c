@@ -195,7 +195,8 @@ natmap_hash_change(struct xt_natmap_htable *ht, size_t nsize)
 	struct natmap_post *post;
 	struct hlist_node *n;
 	struct hlist_head *nhash, *ohash;
-	unsigned int osize, i;
+	size_t osize;
+	unsigned int i;
 
 	if (nsize < 256)
 		return;
@@ -233,7 +234,7 @@ natmap_hash_change(struct xt_natmap_htable *ht, size_t nsize)
 	kvfree(ohash);
 
 	if (!disable_log)
-		pr_info("Changed hash size %u -> %lu\n", osize, nsize);
+		pr_info("Changed hash size %zu -> %zu\n", osize, nsize);
 }
 
 /* register entry into hash table */
@@ -534,8 +535,8 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 {
 	const struct xt_natmap_tginfo *tginfo = par->targinfo;
 	struct xt_natmap_htable *ht = tginfo->ht;
-	const struct nf_nat_range *mr = &tginfo->range;
-	struct nf_nat_range newrange;
+	const struct nf_nat_range2 *mr = &tginfo->range;
+	struct nf_nat_range2 newrange;
 	struct natmap_pre *pre = NULL;
 	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
@@ -668,7 +669,7 @@ natmap_tg_check(const struct xt_tgchk_param *par)
 {
 	struct net *net = par->net;
 	struct xt_natmap_tginfo *tinfo = par->targinfo;
-	const struct nf_nat_range *mr = &tinfo->range;
+	const struct nf_nat_range2 *mr = &tinfo->range;
 	bool pre_r = false;
 	int ret = 0;
 
