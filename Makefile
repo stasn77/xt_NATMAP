@@ -1,7 +1,5 @@
-#KVER   ?= $(shell uname -r)
-#KVER   ?= 4.4.32+
-#KDIR   ?= /lib/modules/$(KVER)/build/
-KDIR   ?= /usr/src/linux/
+KVER   ?= $(shell uname -r)
+KDIR   ?= /lib/modules/$(KVER)/build/
 DEPMOD  = /sbin/depmod -a
 CC     ?= gcc
 obj-m   = xt_NATMAP.o
@@ -10,11 +8,11 @@ CFLAGS_xt_NATMAP.o := -DDEBUG
 all: xt_NATMAP.ko libxt_NATMAP.so
 
 xt_NATMAP.ko: version.h xt_NATMAP.c xt_NATMAP.h
-	make -C $(KDIR) M=$(CURDIR) modules CONFIG_DEBUG_INFO=y
+	make -C $(KDIR) M=$(CURDIR) modules
 	-sync
 
 %_sh.o: libxt_NATMAP.c xt_NATMAP.h
-	gcc -O2 -Wall -Wunused -fPIC -o $@ -c $<
+	gcc -O2 -Wall -Wunused -fPIC -DXTABLES_INTERNAL -o $@ -c $<
 	#$
 
 %.so: %_sh.o

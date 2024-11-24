@@ -1,18 +1,26 @@
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28) && LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
-static inline u_int8_t xt_family(const struct xt_action_param *par)
-{
-	return par->family;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
+# define PDE_DATA pde_data
+#endif
+
+#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+#define PROC_OPS(s,o,r,w,l,d) static const struct file_operations s = { \
+	.open		= o, \
+	.read		= r, \
+	.write		= w, \
+	.llseek		= l, \
+	.release	= d \
 }
-static inline const struct net_device *xt_in(const struct xt_action_param *par)
-{
-	return par->in;
+#else
+#define PROC_OPS(s,o,r,w,l,d) static const struct proc_ops s = { \
+	.proc_open	= o , \
+	.proc_read	= r , \
+	.proc_write	= w , \
+	.proc_release	= d \
 }
-static inline const struct net_device *xt_out(const struct xt_action_param *par)
-{
-	return par->out;
-}
-static inline unsigned int xt_hooknum(const struct xt_action_param *par)
-{
-	return par->hooknum;
-}
+#endif
+
+#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+static const struct file_operations natmap_fops;
+#else
+static const struct proc_ops natmap_fops;
 #endif

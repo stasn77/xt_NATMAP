@@ -43,7 +43,7 @@
 #include "xt_NATMAP.h"
 #include "compat.h"
 
-#define XT_NATMAP_VERSION "0.2.1"
+#define XT_NATMAP_VERSION "0.2.2"
 #include "version.h"
 #ifdef GIT_VERSION
 # undef XT_NATMAP_VERSION
@@ -56,11 +56,11 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION(XT_NATMAP_VERSION);
 MODULE_ALIAS("ipt_NATMAP");
 
-static unsigned int hashsize __read_mostly = 256;
-static unsigned int disable_log __read_mostly = 0;
+static unsigned int hashsize __read_mostly = 1024;
+static unsigned int disable_log __read_mostly = 1;
 module_param(hashsize, uint, S_IRUSR);
 MODULE_PARM_DESC(hashsize,
-		" inital hash size used to look up IPs (default: 256)");
+		" hash size used to look up IPs (default: 1024)");
 module_param(disable_log, uint, S_IRUSR | S_IWUSR);
 MODULE_PARM_DESC(disable_log,
 		" disables logging of bind/timeout events (default: 0)");
@@ -93,7 +93,6 @@ struct natmap_pre {
 
 struct natmap_post {
 	struct hlist_node node;		/* hash bucket list */
-	spinlock_t lock_bh;
 	struct natmap_pre *pre;		/* pointer to prenat ent */
 	struct rcu_head rcu;		/* destruction call list */
 };
@@ -128,13 +127,6 @@ natmap_net *natmap_pernet(struct net *net)
 	return net_generic(net, natmap_net_id);
 }
 
-/* need to declare this at the top */
-#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
-static const struct file_operations natmap_fops;
-#else
-static const struct proc_ops natmap_fops;
-#endif
-
 const __be32 cidr2mask[33] = {
 	0x00000000, 0x00000080, 0x000000C0, 0x000000E0,
 	0x000000F0, 0x000000F8, 0x000000FC, 0x000000FE,
@@ -146,11 +138,7 @@ const __be32 cidr2mask[33] = {
 	0xF0FFFFFF, 0xF8FFFFFF, 0xFCFFFFFF, 0xFEFFFFFF,
 	0xFFFFFFFF,
 };
-/*
-static inline u32 cidr2mask(const int cidr) {
-	return htonl(cidr ? ~0U << (32 - cidr) : 0);
-}
-*/
+
 static inline u32
 hash_addr(unsigned int hsize, const __be32 addr)
 {
@@ -190,55 +178,6 @@ natmap_hash_zalloc(unsigned int hsize)
 	/* will not need INIT_HLIST_NODE because elements's are zeroized */
 
 	return hash;
-}
-
-static void
-natmap_hash_change(struct xt_natmap_htable *ht, size_t nsize)
-{
-	struct natmap_pre *pre;
-	struct natmap_post *post;
-	struct hlist_node *n;
-	struct hlist_head *nhash, *ohash;
-	size_t osize;
-	unsigned int i;
-
-	if (nsize < 256)
-		return;
-
-	nhash = natmap_hash_zalloc(nsize);
-	if (nhash == NULL)
-		return;
-	ohash = ht->pre;
-	osize = ht->hsize;
-	ht->hsize = nsize;
-	for (i = 0; i < osize; i++) {
-		hlist_for_each_entry_safe(pre, n, &ohash[i], node) {
-			spin_lock_bh(&pre->lock_bh);
-			hlist_add_head_rcu(&pre->node, &nhash[hash_addr_mask(
-			    nsize, pre->prenat.addr, pre->prenat.cidr)]);
-			spin_unlock_bh(&pre->lock_bh);
-		}
-	}
-	ht->pre = nhash;
-	kvfree(ohash);
-
-	nhash = natmap_hash_zalloc(nsize);
-	if (nhash == NULL)
-		return;
-	ohash = ht->post;
-	for (i = 0; i < osize; i++) {
-		hlist_for_each_entry_safe(post, n, &ohash[i], node) {
-			spin_lock_bh(&post->lock_bh);
-			hlist_add_head_rcu(&post->node, &nhash[hash_addr(
-			    nsize, post->pre->postnat.from)]);
-			spin_unlock_bh(&post->lock_bh);
-		}
-	}
-	ht->post = nhash;
-	kvfree(ohash);
-
-	if (!disable_log)
-		pr_info("Changed hash size %zu -> %zu\n", osize, nsize);
 }
 
 /* register entry into hash table */
@@ -432,8 +371,6 @@ htable_cleanup(struct xt_natmap_htable *ht, const bool stat)
 				natmap_pre_del(ht, pre);
 			}
 	}
-	if (!stat && ht->hsize > 256)
-		natmap_hash_change(ht, 256);
 	spin_unlock(&ht->lock);
 	cond_resched();
 }
@@ -548,16 +485,9 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	__be32 prenat_ip, postnat_ip;
 	u32 c;
 	unsigned int hooknum = xt_hooknum(par);
-/*
-	NF_CT_ASSERT(hooknum == NF_INET_POST_ROUTING ||
-		     hooknum == NF_INET_PRE_ROUTING);
-*/
+
 	ct = nf_ct_get(skb, &ctinfo);
-/*
-	NF_CT_ASSERT(ct != NULL &&
-	    (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED ||
-	    ctinfo == IP_CT_RELATED_REPLY));
-*/
+
 	rcu_read_lock();
 
 	if (hooknum == NF_INET_PRE_ROUTING) {
@@ -568,13 +498,13 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 
 		pre = natmap_pre_rfind(ht, postnat_ip);
 		if (pre) {
-			spin_lock(&pre->lock_bh);
+			spin_lock_bh(&pre->lock_bh);
 			prenat_ip = pre->prenat.addr;
 			if (ht->mode & XT_NATMAP_STAT) {
 				pre->stat.pkts++;
 				pre->stat.bytes += skb->len;
 			}
-			spin_unlock(&pre->lock_bh);
+			spin_unlock_bh(&pre->lock_bh);
 
 			memset(&newrange, 0, sizeof(newrange));
 			newrange.flags = mr->flags
@@ -610,7 +540,7 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 		    | NF_NAT_RANGE_MAP_IPS
 		    | NF_NAT_RANGE_PERSISTENT;
 
-		spin_lock(&pre->lock_bh);
+		spin_lock_bh(&pre->lock_bh);
 		if (pre->postnat.cidr) {
 			__be32 netmask;
 
@@ -647,13 +577,12 @@ natmap_tg(struct sk_buff *skb, const struct xt_action_param *par)
 			newrange.max_addr.ip = pre->postnat.to;
 			newrange.min_proto = mr->min_proto;
 			newrange.max_proto = mr->max_proto;
-		/*	newrange.flags |= NF_NAT_RANGE_PROTO_RANDOM_FULLY; */
 		}
 		if (ht->mode & XT_NATMAP_STAT) {
 			pre->stat.pkts++;
 			pre->stat.bytes += skb->len;
 		}
-		spin_unlock(&pre->lock_bh);
+		spin_unlock_bh(&pre->lock_bh);
 
 		ret = nf_nat_setup_info(ct, &newrange, HOOK2MANIP(hooknum));
 		if (ret != NF_ACCEPT)
@@ -788,7 +717,7 @@ natmap_seq_start(struct seq_file *s, loff_t *pos)
 	struct xt_natmap_htable *ht = s->private;
 	unsigned int *bucket;
 
-	spin_lock_bh(&ht->lock);
+	spin_lock(&ht->lock);
 
 	if ((ht->mode & XT_NATMAP_STAT) && !(*pos))
 		seq_printf(s, "# name: %s; entities: %u; hash size: %u; mode: "
@@ -836,7 +765,7 @@ natmap_seq_stop(struct seq_file *s, void *v)
 
 	if (!IS_ERR(bucket))
 		kfree(bucket);
-	spin_unlock_bh(&ht->lock);
+	spin_unlock(&ht->lock);
 }
 
 static const struct seq_operations natmap_seq_ops = {
@@ -1080,7 +1009,6 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 	}
 
 	spin_lock_init(&pre->lock_bh);
-	spin_lock_init(&post->lock_bh);
 	spin_lock(&ht->lock);
 
 	/* check existence of these IPs */
@@ -1129,9 +1057,6 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 			pre->post = post;
 			post->pre = pre;
 
-			/* Rehash when load factor exceeds 0.75 */
-			if (ht->count * 4 > ht->hsize * 3)
-				natmap_hash_change(ht, ht->hsize * 2);
 			natmap_pre_add(ht, pre);
 			natmap_post_add(ht, post);
 			pre = NULL;
@@ -1141,8 +1066,6 @@ parse_rule(struct xt_natmap_htable *ht, char *c1, size_t size)
 		natmap_post_del(ht, pre_chk->post);
 		natmap_pre_del(ht, pre_chk);
 
-		if (ht->count * 2 < ht->hsize)
-			natmap_hash_change(ht, ht->hsize / 2);
 	}
 
 	spin_unlock(&ht->lock);
@@ -1214,22 +1137,6 @@ size_t size, loff_t *loff)
 	return p - proc_buf;
 }
 
-#if  LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
-#define PROC_OPS(s,o,r,w,l,d) static const struct file_operations s = { \
-        .open           = o, \
-        .read           = r, \
-        .write          = w, \
-        .llseek         = l, \
-        .release        = d \
-}
-#else
-#define PROC_OPS(s,o,r,w,l,d) static const struct proc_ops s = { \
-        .proc_open      = o , \
-        .proc_read      = r , \
-        .proc_write     = w , \
-        .proc_release   = d \
-}
-#endif
 PROC_OPS(natmap_fops, natmap_proc_open, seq_read, natmap_proc_write, seq_lseek, seq_release);
 
 /* net creation/destruction callbacks */
